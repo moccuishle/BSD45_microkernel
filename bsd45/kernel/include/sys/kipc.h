@@ -87,6 +87,9 @@ struct ipc_port {
 /* EN: Register/release a port; send/recv messages; 0 or negative errno. */
 int	port_register(unsigned port);
 int	port_release(unsigned port);
+/* 中文：查询端口属主 pid（0=无属主），供内核态 VFS 转发判断服务存活 */
+/* EN: Query a port's owner pid (0 = none) for kernel-side VFS liveness checks. */
+int	port_owner(unsigned port);
 int	ipc_send(unsigned port, struct ipc_msg *msg);
 int	ipc_recv(unsigned port, struct ipc_msg *msg);
 /* 中文：进程退出时关闭其所有端口 / Close all ports owned by an exiting process. */

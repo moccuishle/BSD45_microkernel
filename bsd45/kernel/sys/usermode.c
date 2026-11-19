@@ -2184,18 +2184,12 @@ kvfs_reply_deliver(unsigned port, const struct ipc_msg *m)
 	struct srv_args_kernel *wa;
 	int result, data_len;
 
-	if (port == SRV_REPLY_PORT_KERNEL && kvfs_waiter != 0)
-		printf("kvfs reply-hit: waiter=%d st=%d kvfsw=%d\n",
-		    p->uk_pid, p->uk_state, p->uk_kvfs_waiting);
 	if (port != SRV_REPLY_PORT_KERNEL || p == 0 ||
 	    p->uk_state != P_BLOCKED || !p->uk_kvfs_waiting)
 		return (0);
 
 	wa = (struct srv_args_kernel *)m->inline_data;
 	result = (int)wa->handle;	/* handle 字段承载返回值/错误码 */
-	printf("kvfs reply: op=%d waitop=%d result=%d len=%d st=%d nthr=%d\n",
-	    m->type, p->uk_kvfs_op, result, m->len, p->uk_state,
-	    p->uk_p_nthreads);
 
 	if (result >= 0) {
 		if (p->uk_kvfs_op == SRV_OPEN_KERNEL) {
@@ -2244,20 +2238,12 @@ kvfs_forward(struct sysregs *r, unsigned op, unsigned handle,
 	struct proc *p = cur;
 	int n;
 
-	printf("kvfs fwd: op=%d waiter=%d self=%d nthr=%d\n", op,
-	    kvfs_waiter ? kvfs_waiter->uk_pid : -1,
-	    cur ? cur->uk_pid : -1, cur ? cur->uk_p_nthreads : -1);
-	if (kvfs_waiter != 0) {
-		printf("kvfs forward: BUSY op=%d waiter=%d self=%d\n", op,
-		    kvfs_waiter->uk_pid, cur ? cur->uk_pid : -1);
+	if (kvfs_waiter != 0)
 		return (0);		/* 已有在途事务（不应发生）: caller -> EBUSY */
-	}
 	/* 服务未启动/已退出：直接返回，调用方写 -EIO（故障隔离）。
 	 * Service absent/gone: return so the caller yields -EIO. */
-	if (port_owner(SRV_PORT_KERNEL) == 0) {
-		printf("kvfs fwd: op=%d service absent -> EIO\n", op);
+	if (port_owner(SRV_PORT_KERNEL) == 0)
 		return (0);
-	}
 
 	memset(&m, 0, sizeof(m));
 	m.type = op;
@@ -2275,16 +2261,11 @@ kvfs_forward(struct sysregs *r, unsigned op, unsigned handle,
 	 * 避免"入队但对方已从 proc_sched 恢复、不再读队列"竞态。
 	 * Rendezvous first: if fs_server is blocked in ipc_recv(port 0),
 	 * deliver directly to avoid the queue-vs-resume race. */
-	if (ipc_deliver_waiter(SRV_PORT_KERNEL, &m)) {
-		printf("kvfs fwd: op=%d delivered directly\n", op);
+	if (ipc_deliver_waiter(SRV_PORT_KERNEL, &m))
 		goto registered;
-	}
 	n = ipc_send(SRV_PORT_KERNEL, &m);
-	printf("kvfs fwd: op=%d queued n=%d\n", op, n);
-	if (n < 0) {
-		printf("kvfs forward: send op=%d failed n=%d\n", op, n);
+	if (n < 0)
 		return (0);		/* 服务端口无属主等；调用方写 -EIO */
-	}
 
 registered:
 
@@ -2773,13 +2754,8 @@ proc_sched(void)
 			pd_to_load = switch_pd_for(p);
 			hal_kernel_stack_set(t->t_stack_top);
 			sig_deliver(p, regs);
-			if (t->t_state == KT_RUN) {
-				if (p->uk_pid == 3)
-					printf("resume fs: ebx=%x ecx=%x edx=%x eip=%x\n",
-					    regs->ebx, regs->ecx, regs->edx,
-					    regs->eip);
+			if (t->t_state == KT_RUN)
 				resume_user(pd_to_load, regs);
-			}
 		}
 		if (mt != 0 && mt->t_state == KT_RUN && me->uk_state != P_ZOMBIE) {
 			cur = me;
@@ -2794,33 +2770,6 @@ proc_sched(void)
 		if (kthread_runnable())
 			continue;
 		printf("\n[no runnable process]\n");
-		{
-			int j;
-
-			for (j = 0; j < NKTHREAD; j++) {
-				struct kthread *t2 = &kthreads[j];
-				struct proc *p2 = t2->t_proc;
-
-				if (!t2->t_used)
-					continue;
-				printf("  tid%d tst=%d pid=%d uk=%d ipcw=%d ipcp=%d kvfw=%d\n",
-				    j, t2->t_state, p2 ? p2->uk_pid : -1,
-				    p2 ? p2->uk_state : -1,
-				    p2 ? p2->uk_ipc_waiting : -1,
-				    p2 ? (int)p2->uk_ipc_port : -1,
-				    p2 ? p2->uk_kvfs_waiting : -1);
-			}
-			for (j = 0; j < NPROC; j++) {
-				struct proc *p2 = &procs[j];
-
-				if (p2->uk_state == P_FREE)
-					continue;
-				printf("  proc%d pid=%d uk=%d nthr=%d ipcw=%d ipcp=%d kvfw=%d\n",
-				    j, p2->uk_pid, p2->uk_state,
-				    p2->uk_p_nthreads, p2->uk_ipc_waiting,
-				    (int)p2->uk_ipc_port, p2->uk_kvfs_waiting);
-			}
-		}
 		for (;;)
 			hal_cpu_halt();
 	}
@@ -3162,8 +3111,6 @@ proc_exit(int code)
 {
 	struct proc *p;
 	int i, reaped = 0;
-
-	printf("proc_exit: pid=%d code=%d\n", cur ? cur->uk_pid : -1, code);
 
 	for (i = 0; i < NPROC; i++) {
 		p = &procs[i];
@@ -4246,9 +4193,6 @@ bsd45_syscall(struct sysregs *r)
 		/* KVFS: /srv/ virtual fd -> forward SRV_WRITE.  Copy user data into
 		 * a kernel stack buffer first (the IPC payload must be kernel VA). */
 		khandle = kvfs_fd_handle(cur, (int)fd);
-		printf("kvfs write: fd=%d khandle=%d pid=%d fds0=%d\n",
-		    fd, khandle, cur ? cur->uk_pid : -1,
-		    cur ? cur->uk_kvfs_fds[0] : -1);
 		if (khandle >= 0) {
 			char kbuf[SRV_DATA_MAX_KERNEL];
 			unsigned n = len;
@@ -4256,8 +4200,6 @@ bsd45_syscall(struct sysregs *r)
 			if (n > SRV_DATA_MAX_KERNEL)
 				n = SRV_DATA_MAX_KERNEL;
 			if (n > 0 && ucopyin((void *)buf, kbuf, n) < 0) {
-				printf("kvfs write: ucopyin FAILED buf=%x n=%d\n",
-				    buf, n);
 				r->eax = (unsigned)-EFAULT;
 				break;
 			}
@@ -5577,9 +5519,6 @@ bsd45_syscall(struct sysregs *r)
 			break;
 		}
 		if (n != -EAGAIN) {	/* -EIO（服务退出）等：直接返回 */
-			printf("ipc_recv: port=%d msg=%x n=%d pid=%d eax=%d ecx=%x edx=%x esi=%x\n",
-			    r->ebx, r->ecx, n, cur ? cur->uk_pid : -1,
-			    r->eax, r->ecx, r->edx, r->esi);
 			r->eax = (unsigned)n;
 			break;
 		}

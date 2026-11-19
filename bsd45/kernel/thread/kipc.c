@@ -117,6 +117,23 @@ ports_init(void)
 	ports_inited = 1;
 }
 
+/*
+ * 中文：查询端口属主 pid（0 表示无属主/服务已退出）。内核态 VFS 转发在发送
+ * 请求前用它判断服务是否存活，避免向已死服务端口发请求后永久阻塞。
+ * EN: Return a port's owner pid (0 = no owner / service gone).  Kernel-side VFS
+ * forwarding checks it before sending so a dead service yields EIO instead of
+ * a permanent block.
+ */
+int
+port_owner(unsigned port)
+{
+
+	if (port >= NPORT)
+		return (-EINVAL);
+	ports_init();
+	return ((int)ports[port].p_owner);
+}
+
 /* 中文：为当前进程注册占用一个端口；已被其他进程占用返回 -EBUSY */
 /* EN: Claim a port for the current process; -EBUSY if another owns it. */
 int

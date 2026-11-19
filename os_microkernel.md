@@ -128,7 +128,9 @@ init supervisor、物理网卡驱动上移。
 > 客户端经 IPC 端口按"名字→句柄→统一 ops"访问，故障隔离与重启同构。详见
 > `os_device-model.md`。
 >
-> **S402/S403 后续**：VFS 透明转发层（libc 层检测 `/srv/`，标准 open/read/
-> write 透明经 IPC 到 fs_server）、共享页大数据闭环（KP-7 分配→填充→提交→
-> 映射→释放）、用户态网络协议栈（UDP/IP + 环回虚拟网卡运行在用户态 netsrv）
-> 均已完成。全部用户态/libc 实现，内核零改动。详见 `os_net.md`。
+> **S402/S403/S404 后续**：VFS 透明转发层（**内核 syscall handler** 拦截 `/srv/` 前缀与
+> 虚拟 fd，标准 open/read/write 透明经 IPC 到 fs_server，采用"续传状态 + 回复回调代劳"的
+> 一次性完成模式，不阻塞后续跑 C 代码）、共享页大数据闭环（KP-7 分配→填充→提交→
+> 映射→释放）、用户态网络协议栈（UDP/IP + 环回虚拟网卡运行在用户态 netsrv）均已完成。
+> 转发层已从 S402 的 libc 层实现迁回内核态，`proc/kthread` 模型与优先级调度算法未改动。
+> 详见 `os_net.md` §1。
