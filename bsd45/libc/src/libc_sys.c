@@ -319,23 +319,25 @@ _exit(int status)
 		;
 }
 
+/*
+ * KVFS: /srv/ forwarding now lives in the kernel syscall handler, not libc.
+ * Standard open/read/write/close go straight to the kernel; the kernel
+ * detects /srv/ paths and forwards via IPC to user-space fs_server.  The
+ * srv_* helpers above are kept for source compatibility but are no longer
+ * used by these wrappers (srv_* direct API users still work).
+ * KVFS: /srv/ 转发已移到内核 syscall handler，libc 不再拦截。标准
+ * open/read/write/close 直通内核，由内核识别 /srv/ 并转发。上面的 srv_*
+ * helper 保留以兼容源码，但这些包装函数不再使用它们。
+ */
 ssize_t
 read(int fd, void *buf, size_t n)
 {
-	int slot = srv_fd_slot(fd);
-
-	if (slot >= 0)
-		return (syscall_rv(srv_fd_read(slot, buf, (unsigned)n)));
 	return (syscall_rv(sys3(SYS_read, fd, (int)buf, n)));
 }
 
 ssize_t
 write(int fd, const void *buf, size_t n)
 {
-	int slot = srv_fd_slot(fd);
-
-	if (slot >= 0)
-		return (syscall_rv(srv_fd_write(slot, buf, (unsigned)n)));
 	return (syscall_rv(sys3(SYS_write, fd, (int)buf, n)));
 }
 
@@ -344,13 +346,6 @@ open(const char *path, int flags, ...)
 {
 	int mode = 0;
 
-	/* 中文：S402 /srv/ 透明转发——标准 open 走到这里，检测前缀后经 IPC 访问
-	 * 用户态 fs_server，返回虚拟 fd。其他路径完全不变（零回退）。
-	 * EN: S402 /srv/ transparent forwarding — standard open detects the prefix
-	 * and reaches the user-space fs_server over IPC, returning a virtual fd.
-	 * All other paths are unchanged (zero regression). */
-	if (strncmp(path, "/srv/", 5) == 0)
-		return (syscall_rv(srv_open_path(path)));
 	if (flags & O_CREAT)
 		mode = 0666;
 	return (syscall_rv(sys3(SYS_open, (int)path, flags, mode)));
@@ -359,10 +354,6 @@ open(const char *path, int flags, ...)
 int
 close(int fd)
 {
-	int slot = srv_fd_slot(fd);
-
-	if (slot >= 0)
-		return (syscall_rv(srv_fd_close(slot)));
 	return (syscall_rv(sys1(SYS_close, fd)));
 }
 

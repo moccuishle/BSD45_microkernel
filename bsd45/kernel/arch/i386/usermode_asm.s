@@ -64,17 +64,27 @@ _resume_user:
 	pushl	48(%esi)		/* eflags */
 	pushl	44(%esi)		/* cs */
 	pushl	40(%esi)		/* eip */
-	movl	24(%esi), %ebx
-	movl	28(%esi), %edx
-	movl	32(%esi), %ecx
-	movl	16(%esi), %ebp
-	movl	24(%esp), %edi		/* user edi */
-	movl	28(%esp), %esi		/* user esi */
+	/*
+	 * 中文：先用 dx 作为临时设置段选择子，**之后再**加载用户 edx。否则
+	 * "movw __udatasel,%dx" 会把刚恢复的用户 edx 低 16 位改写成段选择子，
+	 * 破坏依赖 edx 传递常量/参数的代码（如 GCC 内联 syscall 用
+	 * "mov %edx,%ebx" 传递 SRV_PORT=0，导致端口号变成段选择子 0x27）。
+	 * EN: Load user edx AFTER setting the segments.  Using dx as a scratch
+	 * register for __udatasel would otherwise clobber the restored user edx
+	 * (e.g. GCC's "mov %edx,%ebx" passing SRV_PORT=0), turning the port
+	 * number into the selector 0x27.
+	 */
 	movw	__udatasel, %dx
 	movw	%dx, %ds
 	movw	%dx, %es
 	movw	%dx, %fs
 	movw	%dx, %gs
+	movl	28(%esi), %edx		/* user edx, loaded after segment setup */
+	movl	24(%esi), %ebx
+	movl	32(%esi), %ecx
+	movl	16(%esi), %ebp
+	movl	24(%esp), %edi		/* user edi */
+	movl	28(%esp), %esi		/* user esi */
 	testl	%eax, %eax		/* pd == 0 means same address space: keep CR3 */
 	jz	1f
 	movl	%eax, %cr3
