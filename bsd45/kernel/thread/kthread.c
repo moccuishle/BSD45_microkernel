@@ -27,7 +27,33 @@ extern void pmap_map(vm_offset_t, vm_offset_t, vm_offset_t, int);
 extern unsigned vfs_page_alloc(void);
 extern void bzero(void *, unsigned);
 
-struct kthread	kthreads[NKTHREAD];
+/*
+ * The TCB pool lives in a kernel VA window rather than .bss: the boot loader
+ * stages the kernel image at 0x10000 and stage 2 runs at 0x90000, so .bss
+ * has to stay below 0x90000.  A window (backed by pages reserved from the
+ * bump allocator) removes that constraint: capacity becomes a memory
+ * question, and kthreads[i] / &kthreads[i] / (me - kthreads) keep working
+ * exactly as before - it is still one contiguous array of NKTHREAD TCBs.
+ * TCB 池放在内核 VA 窗口而不是 .bss：引导器把镜像暂存在 0x10000、stage2 在
+ * 0x90000 运行，因此 .bss 必须留在 0x90000 以下。窗口（物理页由 bump 分配器
+ * 预留）解除这个限制，容量只受内存约束，下标语义不变——它仍是一段连续的
+ * NKTHREAD 个 TCB。
+ */
+#define	KTHREAD_TABLE_VA	0xFE3C0000	/* after procs (0xFE340000+452KB),
+						 * below CD_IMAGE_VA 0xFE400000 */
+struct kthread	*kthreads;
+
+extern void *kern_table_alloc(unsigned va, unsigned size);
+
+void
+kthread_table_init(void)
+{
+
+	if (kthreads != 0)
+		return;
+	kthreads = (struct kthread *)kern_table_alloc((unsigned)KTHREAD_TABLE_VA,
+	    NKTHREAD * (unsigned)sizeof(struct kthread));
+}
 static unsigned	sched_esp;
 struct kthread	*curk;
 unsigned	kthread_switches;
@@ -119,7 +145,9 @@ kthread_init(void)
 {
 	int i;
 
-	bzero(kthreads, sizeof(kthreads));
+	if (kthreads == 0)
+		kthread_table_init();
+	bzero(kthreads, NKTHREAD * sizeof(struct kthread));
 	curk = 0;
 	sched_esp = 0;
 	kthread_switches = 0;

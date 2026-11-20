@@ -27,14 +27,15 @@
  * now live in the shared kernel window (NPROC = NKTHREAD = 1024), so the old
  * hard cap of 8 (and the boot-loader-derived cap of 24) is gone.  The binding
  * limit is physical memory: fork returns -EAGAIN when page_alloc runs out.
- * 24 live children needs only ~1 MB and far exceeds the original NPROC=8.
+ * 200 live children needs a few MB and far exceeds the original NPROC=8.
+ * 200 个存活子进程只需几 MB，远超原来的 NPROC=8 与引导器上限 24。
  * 同时存活的子进程数：进程表与 TCB 池已移入共享内核窗口（NPROC = NKTHREAD =
  * 1024），旧的 8（以及受引导器限制的 24）上限不复存在。真正瓶颈是物理内存，
  * page_alloc 耗尽时 fork 返回 -EAGAIN。200 个存活子进程仅需几 MB。
  */
-#define	TARGET_LIVE	20
-#define	TARGET_SEQ	120	/* phase A sequential fork/wait cycles */
-#define	MIN_LIVE	12	/* must be far beyond the old 8 */
+#define	TARGET_LIVE	200
+#define	TARGET_SEQ	200	/* phase A sequential fork/wait cycles */
+#define	MIN_LIVE	150	/* must be far beyond the old 8 */
 
 static volatile int child_spinner;
 

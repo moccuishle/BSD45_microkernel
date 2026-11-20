@@ -122,3 +122,59 @@ function Get-Qemu {
     if ($cmd) { return $cmd.Source }
     return $null
 }
+
+# ---------------------------------------------------------------- python
+# python.exe on PATH is often the Microsoft Store *stub* in
+# %LOCALAPPDATA%\Microsoft\WindowsApps: running it opens the Store and
+# returns non-zero without executing anything.  build_kernel.ps1 used to
+# call `Get-Command python` and then silently skip tools/pe_bss_fix.py,
+# which is exactly what inflated the Windows kernel image from ~170 KB to
+# 618 KB and made the BIOS staging area overrun 0xA0000 (see
+# os_vmware_debug.md).  Resolve a *real* interpreter and prove it runs.
+function Test-PythonExe([string]$exe) {
+    if (!$exe -or !(Test-Path $exe)) { return $false }
+    if ($exe -match '\\WindowsApps\\') { return $false }
+    try {
+        $out = & $exe -c "print(1)" 2>$null
+        return ("$out".Trim() -eq "1")
+    } catch { return $false }
+}
+
+function Get-PythonExe {
+    $cands = @()
+    if ($env:PYTHON) { $cands += $env:PYTHON }
+    $msys = Find-Msys2Root
+    if ($msys) {
+        $cands += @(
+            (Join-Path $msys "ucrt64\bin\python.exe"),
+            (Join-Path $msys "mingw64\bin\python.exe"),
+            (Join-Path $msys "usr\bin\python.exe")
+        )
+    }
+    $cands += @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python313\python.exe"),
+        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
+        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python311\python.exe"),
+        (Join-Path $env:ProgramFiles "Python313\python.exe"),
+        (Join-Path $env:ProgramFiles "Python312\python.exe"),
+        (Join-Path $env:ProgramFiles "Python311\python.exe")
+    )
+    foreach ($n in "python3.exe", "python.exe") {
+        $cmd = Get-Command $n -ErrorAction SilentlyContinue
+        if ($cmd) { $cands += $cmd.Source }
+    }
+    # versioned installs that are not on PATH
+    foreach ($glob in @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python*\python.exe"),
+        (Join-Path $env:USERPROFILE ".workbuddy\binaries\python\versions\*\python.exe"),
+        "C:\Python*\python.exe"
+    )) {
+        Get-ChildItem $glob -ErrorAction SilentlyContinue | ForEach-Object {
+            $cands += $_.FullName
+        }
+    }
+    foreach ($c in $cands) {
+        if (Test-PythonExe $c) { return $c }
+    }
+    return $null
+}

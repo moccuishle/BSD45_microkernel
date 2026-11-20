@@ -1,4 +1,4 @@
-﻿# build_iso.ps1 - build the El Torito boot image and the BSD45-ELF-x86 ISO
+# build_iso.ps1 - build the El Torito boot image and the BSD45-ELF-x86 ISO
 param(
     [string]$Kernel = "",
     [string]$OutIso = "",

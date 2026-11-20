@@ -24,10 +24,9 @@ keyboard.allowBothIRQs = "FALSE"
 bios.bootOrder = "cdrom"
 bios.hddOrder = ""
 
-# Uncomment to capture the serial console (useful when debugging boot):
-serial0.present = "TRUE"
-serial0.fileType = "file"
-serial0.fileName = "serial.log"
+# No serial0 device on purpose: a file-backed port captures nothing from this
+# guest and a network-backed one blocks the vCPU when nobody is connected.
+# Use `vmrun snapshot` + tools/vm_screen.py --klog instead (os_vmware_debug.md).
 extendedConfigFile = "BSD45-proctest.vmxf"
 virtualHW.productCompatibility = "hosted"
 ide0:0.present = "FALSE"
@@ -43,5 +42,7 @@ svga.vramSize = "134217728"
 vmotion.checkpointFBSize = "134217728"
 vmotion.checkpointSVGAPrimarySize = "134217728"
 monitor.phys_bits_used = "42"
-cleanShutdown = "FALSE"
+cleanShutdown = "TRUE"
 softPowerOff = "FALSE"
+
+# gdb remote stub for kernel debugging (see os_vmware_debug.md)

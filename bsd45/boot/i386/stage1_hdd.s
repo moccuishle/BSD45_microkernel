@@ -7,9 +7,9 @@
  *
  * Runs in 16-bit real mode at 0x7C00 with DL = BIOS boot drive (0x80).
  * Uses INT 13h AH=42h (LBA extended read) to load:
- *   - stage2 (the ELF loader) from LBA 1 straight to 0x90000;
+ *   - stage2 (the ELF loader) from LBA 1 straight to 0x8000;
  *   - the raw ELF kernel from <kernel_lba> (manifest) to 0x10000.
- * Then enables A20 + protected mode and far-jumps to stage2 at 0x90000.
+ * Then enables A20 + protected mode and far-jumps to stage2 at 0x8000.
  *
  * All sector arithmetic is 512 bytes/sector (unlike the 2048-byte CD
  * sectors used by the ISO stage1).  The manifest is patched by install.c.
@@ -19,7 +19,7 @@
 	.text
 	.globl	_start
 
-#define	STAGE2_ADDR	0x90000
+#define	STAGE2_ADDR	0x8000
 #define	STAGE2_LBA	1
 #define	STAGE2_SECTORS	8		/* 4 KiB, enough for the ELF loader */
 
@@ -38,8 +38,9 @@ _start:
 	movw	$msg_hello, %si
 	call	puts
 
-	/* stage2 is loaded AFTER the kernel: loading it first would let the
-	 * kernel's last sectors (which reach 0x90000) overwrite stage2. */
+	/* stage2 lives at 0x8000, below the 0x10000 staging area, so the
+	 * kernel image can never reach it - but it is still loaded last so a
+	 * short read of the kernel leaves the loader intact for a retry. */
 
 	movb	$0x42, %al
 	outb	%al, $0xE9
@@ -80,11 +81,11 @@ read_done:
 	movb	$0x43, %al
 	outb	%al, $0xE9
 
-	/* ---- load stage2 LAST, into 0x90000 (kernel load may have used it) */
+	/* ---- load stage2 LAST, into 0x8000 ------------------------------ */
 	movl	$STAGE2_LBA, dap_lba
 	movw	$STAGE2_SECTORS, dap_count
 	movw	$0, dap_off
-	movw	$0x9000, dap_seg
+	movw	$(STAGE2_ADDR >> 4), dap_seg
 	call	read_sectors
 
 	movw	$msg_stage2, %si
@@ -103,7 +104,7 @@ read_done:
 	movl	%cr0, %eax
 	orl	$1, %eax
 	movl	%eax, %cr0
-	/* 32-bit far jump to stage2 (linked at 0x90000) */
+	/* 32-bit far jump to stage2 (linked at 0x8000) */
 	.byte	0x66, 0xEA
 	.long	STAGE2_ADDR
 	.word	0x08

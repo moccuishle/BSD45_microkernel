@@ -19,17 +19,20 @@
 #include "sys/platform.h"
 
 /*
- * KLT pool (S406): NKTHREAD is the TCB table capacity.  Each slot owns an
- * 8 KB kernel stack mapped at KSTACK_VA in the shared kernel PDE 0x3fa, so
- * 28 slots take 224 KB of the 2 MB available there.  The table itself stays
- * a static array (layout constraint, see NPROC in usermode.c).
+ * KLT pool (S407): NKTHREAD is the TCB table capacity.  Each slot owns an
+ * 8 KB kernel stack mapped at KSTACK_VA in the shared kernel PDE 0x3fa,
+ * which covers 0xFE800000-0xFEBFFFFF = 2 MB, i.e. 256 stacks.  Going above
+ * 256 would spill into PDE 0x3fb and needs its page table built first.
+ * The table itself lives in the KTHREAD_TABLE_VA window, so it costs no
+ * image bytes and capacity is a RAM/VA budget question only - the 1:1
+ * kernel-thread model is unchanged.
  * 实际存活上限由物理内存经 page_alloc 决定，内存耗尽时 fork/spawn 返回
  * -EAGAIN 而非 panic。1:1 内核线程模型不变。
  */
-#define	NKTHREAD	24		/* TCB slots (boot-loader layout limit) */
+#define	NKTHREAD	256		/* TCB slots = 2 MB / 8 KB stack window */
 
 /*
- * TID namespace partition (pid may reach 257 now):
+ * TID namespace partition (pid may reach NPROC now):
  *   main thread    tid == pid                     (1 .. NPROC+1)
  *   extra user tid = TID_USER_BASE + pid*TID_STRIDE + n
  *   kernel thread  tid = TID_KERN_BASE + slot      (high, never a pid)
@@ -128,7 +131,9 @@ struct kthread {
 };
 
 extern struct kthread *curk;
-extern struct kthread kthreads[NKTHREAD];
+/* TCB pool lives in a VA window, not in .bss (see kthread.c). */
+extern struct kthread *kthreads;
+void kthread_table_init(void);
 
 void	kthread_init(void);
 struct kthread *kthread_spawn(const char *name, void (*entry)(void *),

@@ -1,4 +1,4 @@
-﻿# build_kernel.ps1 - cross-build the 4.5BSD-Lite2 i386 kernel as UNIX ELF
+# build_kernel.ps1 - cross-build the 4.5BSD-Lite2 i386 kernel as UNIX ELF
 # using the MSYS2 mingw32 (i686-w64-mingw32) gcc.
 param(
     [switch]$NoLink,
@@ -303,12 +303,17 @@ if ($NoLink) { Write-Host "objects built"; exit 0 }
 # all-zero payload with no relocations *is* uninitialised data), so the
 # kernel behaves identically while the image shrinks by ~400 KB.
 $fixer = Join-Path $ws "tools\pe_bss_fix.py"
-$py = Get-Command python -ErrorAction SilentlyContinue
-if (-not $py) { $py = Get-Command python3 -ErrorAction SilentlyContinue }
+# A bare `Get-Command python` may resolve to the Microsoft Store stub, which
+# runs nothing and makes this step silently a no-op -> the image keeps every
+# zero-initialised static array in .data and grows past what the boot loader
+# can stage (see os_vmware_debug.md).  Always resolve a working interpreter.
+$py = Get-PythonExe
 if ($py -and (Test-Path $fixer)) {
-    & $py.Source $fixer --recurse $obj | Out-Host
+    & $py $fixer --recurse $obj | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "pe_bss_fix.py failed" }
 } else {
-    Write-Host "warning: python not found - zero-initialised static arrays stay in .data and the kernel image will be inflated" -ForegroundColor Yellow
+    Write-Host "warning: no working python found - zero-initialised static arrays stay in .data" -ForegroundColor Red
+    Write-Host "         the kernel image will be ~450 KB larger than it should be" -ForegroundColor Red
 }
 
 # ---------------------------------------------------------------- link

@@ -258,3 +258,92 @@ stage2 在 `0x8F000` 存 ELF 头快照、自身代码在 `0x90000`。实测：
 
 在 1、2 未完成前，任何 >24 的容量都会破坏引导或挂载，因此本仓库保持 24 槽的
 已验证状态。
+
+---
+
+## 8. S407 攻坚：把"布局敏感"查清楚，进程表搬进 VA 窗口（2026-11-21）
+
+### 8.1 之前所有怪现象的根因（有实证）
+
+§7 把"镜像布局影响 ATAPI/ISO 挂载"当成引导器 bug。**实际是两个独立问题**：
+
+**（1）stage1 的暂存区根本装不下 >576KB 的内核。**
+stage1 用 BIOS `INT 13h` 把 ELF 读到 `0x10000` 起。用内存快照（见
+`os_vmware_debug.md`）逐 2KB 比对"暂存区 vs ELF 文件"：
+
+```
+elf size 0x97ecc (618KB)
+first differing 2K block at file 0x90000 -> phys 0xa0000
+staged: 00 00 00 ...   elf: 0d 40 00 ...
+```
+
+即 **`0xA0000` 以上（显存窗口）BIOS 拒绝写入**，暂存区上限 640KB−64KB=576KB。
+618KB 的内核最后 42KB 永远读不进来 → 内核 `.data` 是残缺的 → "ISO 挂载失败、
+串口乱码、`.data` 一挪就崩"全是半截内核在跑。VMware 与 QEMU 的 BIOS 行为不同，
+所以同一个 ISO 在 QEMU 里"看起来正常"。
+
+**（2）镜像被无谓地撑大了 450KB。**
+`build_kernel.ps1` 用 `Get-Command python` 找解释器跑 `tools/pe_bss_fix.py`，
+在本机解析到的是 `%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe`
+（Store 别名，执行即退出、什么都不做），于是 fixer **静默跳过**：
+所有零初始化静态量（`heap` 256KB、`pipes` 33KB、`procs`、`page_ref`…）
+留在 `.data` 里带着真实字节。
+
+| | 镜像 | .data | 结果 |
+|---|---|---|---|
+| fixer 未生效 | 618,188 B | 447 KB | 超 576KB，VMware 里停在 stage1 |
+| fixer 生效 | 176,012 B | 1 KB | 正常 |
+
+修法：`tools-find.ps1` 增加 `Get-PythonExe`（跳过 `\WindowsApps\`、
+真跑 `python -c "print(1)"` 验证），`build_kernel.ps1` 用它并在找不到时
+**红色告警 + 不再静默**。
+
+### 8.2 引导器改动
+
+- `stage2` 仍在 `0x90000`（必须在内核镜像与 `.bss` 之上），
+  但 **ELF 头快照从 `0x8F000` 搬到 `0x300000`**（1MB 以上）。
+  这样内核表再长也撞不到快照，§7 的 `0x8F000` 天花板彻底消失。
+- `stage1/stage2` 增加 COM1 早期检查点（`S2: protected mode, ELF staged` /
+  `S2: ELF loaded, jumping to kernel`），VMware 没有 debugcon 时靠它判断
+  加载器走到哪一步。
+
+### 8.3 进程表 / TCB 池搬进内核 VA 窗口
+
+`.bss` 受 `0x90000` 的限制仍在，所以**不再把表放进 `.bss`**：
+
+| 表 | VA | 容量 | 物理来源 |
+|---|---|---|---|
+| `procs[]` | `0xFE400000`（PDE `0x3f9`） | `NPROC=256`，452KB | `kern_table_alloc()` 从 bump 分配器预留连续页并逐页 `pmap_map` |
+| `kthreads[]` | `0xFE600000`（PDE `0x3f9`） | `NKTHREAD=256`，2MB 栈窗口 | 同上 |
+
+- `procs` / `kthreads` 由数组改为指针，`procs[i]`、`&procs[i]`、
+  `me - kthreads` 语义不变（连续数组 + 指针运算）。
+- KLT 1:1 模型、调度器遍历方式、`struct proc`/`struct kthread` 布局**完全未改**。
+- 内核 `.bss` 反而变小：`sections end` 从 `0x8E014` 变成 `0x83014`。
+
+### 8.4 当前状态（如实记录，未完成）
+
+已完成并验证（QEMU `-m 512`）：
+
+```
+S2: protected mode, ELF staged
+S2: ELF loaded, jumping to kernel
+Kernel: ELF32 i386, KERNBASE fe000000, first free page 8b000
+kthread: 256 thread slots at fea00000
+usermode: 256 proc slots at fe400000 (452 KB)
+BSD/386 monitor - type 'help' for commands
+```
+
+**未完成 / 已知回归**：`/sbin/init` 起来后 exec `/bin/sh` 时
+`argc` 变成 0（正常应为 3），shell 直接退出，自动测试脚本没跑起来，
+因此 256 进程的 PASS 还没拿到。这是一处**新引入的回归**，
+下一步在 `bsd45_syscall` 的 execve 路径（用户栈 argv 拷贝 / 页表校验）
+上定位；与表放在窗口本身无关（init 自己能跑起来说明表/调度是好的）。
+
+**仍未做**：把内核搬到 1MB 以上（本次试过并回退：`pmap_bootstrap()`
+里 `firstaddr = 0x100000` 的硬编码和
+`virtual_avail = atdevbase + 0x100000 - 0xa0000 + 10*NBPG` 都假设内核
+在 1MB 以下，内核一搬过去 CMAP1/CMAP2/vmmap/msgbuf 就落进 `.text`，
+表现为 `pmap_enter` 里 TRAP 12。要搬必须先改这两处，并同步搬
+`SCRATCH_PD/PT/PAGE`）。窗口方案已经把"几百个进程"的目标解决了，
+搬 1MB 只剩"给内核再留 3MB 余量"的意义，优先级可降。

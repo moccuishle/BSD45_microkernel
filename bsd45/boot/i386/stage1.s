@@ -4,6 +4,13 @@
  * Runs in 16-bit real mode at 0x7C00.  Reads the ELF kernel from a fixed
  * LBA (recorded in the manifest by mkiso.ps1), copies the 32-bit stage 2
  * to 0x90000, enables A20 and protected mode, and jumps to stage 2.
+ *
+ * Stage 2 must sit above the kernel image and its .bss: it is still running
+ * while the kernel is already laid out, so the image has to end below
+ * 0x90000 (see kernel.ld).  The ELF-header snapshot stage 2 needs lives at
+ * 0x300000, above 1 MB, so growing kernel tables cannot hit either one.
+ * stage2 必须在内核镜像与其 .bss 之上（加载时它还在执行），所以镜像必须
+ * 结束在 0x90000 以下；它用的 ELF 头快照在 1MB 以上的 0x300000。
  */
 
 	.code16
@@ -68,11 +75,11 @@ read_done:
 	movw	$msg_stage2, %si
 	call	puts
 
-	/* relocate stage 2 to 0x90000 */
+	/* relocate stage 2 to 0x90000 (above the kernel image and .bss) */
 	movw	manifest+12, %cx	/* stage 2 bytes */
 	shrw	$1, %cx
 	movw	$0x7C00+STAGE2_OFF, %si
-	movw	$0x9000, %ax
+	movw	$(STAGE2_ADDR >> 4), %ax
 	movw	%ax, %es
 	xorw	%di, %di
 	rep	movsw

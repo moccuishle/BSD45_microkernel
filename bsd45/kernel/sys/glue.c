@@ -326,8 +326,33 @@ main(vm_offset_t firstaddr)
 	extern vm_offset_t avail_start, avail_end, virtual_avail, virtual_end;
 	extern int IdlePTD;
 	extern int Maxmem, physmem;
+	extern void page_alloc_set_floor(unsigned);
 
-	printf("\n");
+	/*
+	 * The bump allocator must start *after* this image.  locore passes the
+	 * page-rounded _end plus its bootstrap pages, and the setter only ever
+	 * clamps upwards (floor 0x200000), so a kernel that grows past 2 MB can
+	 * never have its own pages handed out as free memory.
+	 * bump 分配器起点必须在内核镜像之后（只向上取整，最低 0x200000），
+	 * 内核长大后不会把自己的页当空闲页发出去。
+	 */
+	page_alloc_set_floor((unsigned)firstaddr);
+
+	/*
+	 * Layout guard: the scratch mapping pages (0xFE200000..0xFE202FFF,
+	 * see SCRATCH_PD in usermode.c) are rewritten by map_page() on every
+	 * page access, so the kernel image must stay below them.  A silent
+	 * overlap corrupts kernel variables instead of faulting, which is very
+	 * expensive to debug - fail loudly instead.
+	 * locore passes firstaddr = page_rounded(_end) + 7 bootstrap pages.
+	 * 布局护栏：临时映射页（见 usermode.c 的 SCRATCH_PD）每次访问物理页都会
+	 * 被重写，镜像必须留在它们下面；重叠只会静默踩坏内核变量，所以显式 panic。
+	 */
+	if (((unsigned)firstaddr - 7 * NBPG) >= 0xFE200000)
+		panic("kernel image ends %x, overlaps scratch window 0xFE200000",
+		    (unsigned)firstaddr - 7 * NBPG);
+
+printf("\n");
 	printf("4.5BSD-Lite2 (i386) ELF kernel\n");
 	printf("Kernel: ELF32 i386, KERNBASE %x, first free page %x\n",
 	    KERNBASE, firstaddr);

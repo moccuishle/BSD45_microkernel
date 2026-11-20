@@ -56,6 +56,19 @@
 #define	USER_HEAP_START	0x09000000
 #define	USER_HEAP_MAX	0x0C000000
 
+/*
+ * Scratch mapping window.  These three pages are rewritten by map_page() on
+ * every physical-page access, so they must stay above the kernel image and
+ * clear of every other fixed kernel object in the same 4 MB SYSTEM page
+ * table (PDE 0x3F8): the process table at 0xFE340000 and the TCB pool at
+ * 0xFE3C0000 live higher up in that very page table.  An overlap corrupts
+ * kernel state silently instead of faulting (next_pa was zeroed that way
+ * once), so main() checks it and panics.
+ * 临时映射窗口：这三页每次访问物理页都会被重写，必须在内核镜像之上，且避开
+ * 同一 4MB 系统页表（PDE 0x3F8）里的其他固定对象——进程表 0xFE340000、
+ * TCB 池 0xFE3C0000 都在同一张页表里更高处。重叠只会静默踩坏内核状态
+ * （next_pa 曾被清零），所以 main() 里带显式检查。
+ */
 #define	SCRATCH_PD	0xFE200000
 #define	SCRATCH_PT	0xFE201000
 #define	SCRATCH_PAGE	0xFE202000
@@ -165,27 +178,34 @@ static struct file ramfs[] = {
 /* saved user context (struct sysregs) is declared in sys/platform.h */
 
 /*
- * Process table capacity (S406).  procs[] stays a static array inside .data:
- * the boot path (locore/pmap/ATAPI) is sensitive to the kernel image layout,
- * and moving this table into a separate kernel VA window shifted .data/.bss
- * far enough that the ISO mount stopped working (probe: iso_mount() failed,
- * console output corrupted).  The array is therefore sized to the largest
- * value that keeps every file-backed segment below the stage2 snapshot at
- * 0x8F000 and the running stage2 at 0x90000:
- *   .data ends 0x87400, .rdata 0x8Axxx, .bss ends 0x8E014  (< 0x8F000)
- * Measured: 24 slots -> sections end 0x8E014 (boots, mounts, proctest PASS);
- * 28 slots -> 0x91014 (.bss crosses 0x90000, the running stage2) and fails.
+ * Process table capacity (S407).  The old limit of 24 was a *loader* limit:
+ * .bss had to end below stage 2 at 0x90000 (INT 13h itself refuses to write
+ * from 0xA0000 up, so the staged image is capped at 576 KB), and 24 x
+ * sizeof(struct proc) fitted exactly.  Both constraints are gone:
  *
- * The live ceiling is still physical memory: page_alloc() fails when RAM runs
- * out and fork returns -EAGAIN/-ENOMEM instead of panicking, so a VMware guest
- * with more RAM hosts more live processes up to NPROC.
- * 进程表容量（S406）。procs[] 仍为 .data 内的静态数组：引导路径（locore/pmap/ATAPI）
- * 对内核镜像布局敏感，把该表搬到独立内核窗口会使 .data/.bss 位移过大，导致 ISO
- * 挂载失败（探针证实 iso_mount() 失败、控制台输出错乱）。因此按最大安全值定容：
- * 保证所有文件段低于 stage2 快照 0x8F000、且不覆盖运行中的 stage2（0x90000）。
+ *   - procs[] is no longer part of .bss: it lives in the PROC_TABLE_VA
+ *     window, backed by pages taken from the bump allocator, so the table
+ *     costs zero bytes in the image the BIOS has to stage;
+ *   - stage 2's ELF-header snapshot moved from 0x8F000 to 0x300000, above
+ *     1 MB, so .bss has the whole 0x10000..0x90000 range to itself;
+ *   - zero-initialised statics really do land in .bss now (build_kernel.ps1
+ *     used to silently skip tools/pe_bss_fix.py because `Get-Command python`
+ *     resolved to the Microsoft Store stub, inflating the image to 618 KB -
+ *     more than the 576 KB the BIOS can stage).
+ *
+ * NPROC x sizeof(struct proc) = 256 x 1808 = 452 KB of kernel VA (not image),
+ * and the live ceiling is physical memory: page_alloc() fails when RAM runs
+ * out and fork returns -EAGAIN/-ENOMEM instead of panicking.
+ * 进程表容量（S407）。旧的 24 是**引导器**上限：.bss 必须在 0x90000 的 stage2
+ * 之下（INT 13h 也不写 0xA0000 以上，暂存镜像上限 576KB），24 x 1808 刚好塞满。
+ * 现在两个约束都没了：procs[] 不再属于 .bss，而在 PROC_TABLE_VA 窗口里（物理页
+ * 由 bump 分配器预留，镜像里零字节）；stage2 的 ELF 头快照从 0x8F000 搬到
+ * 1MB 以上的 0x300000，.bss 独占 0x10000..0x90000；而且零初始化静态量现在真
+ * 的进 .bss（过去 `Get-Command python` 命中应用商店桩，pe_bss_fix.py 被静默
+ * 跳过，镜像涨到 618KB，超过 BIOS 能暂存的 576KB）。
  * 实际存活上限仍由物理内存决定：page_alloc 耗尽时 fork 返回 -EAGAIN/-ENOMEM。
  */
-#define	NPROC		24
+#define	NPROC		256		/* process slots (was 24: loader layout) */
 /* TID namespace constants (TID_USER_BASE/STRIDE/KERN_BASE) live in kthread.h. */
 #define	P_FREE		0
 #define	P_RUN		1
@@ -227,7 +247,24 @@ static struct file ramfs[] = {
 /* struct proc (sys/proc.h) is the authoritative kernel process object;
  * its tail carries the process runtime state (uk_ prefix). */
 
-static struct proc	procs[NPROC];
+/*
+ * Process table lives in a kernel VA window, not in .bss (that is what frees
+ * NPROC from the loader's 0x90000 ceiling).  procs[i] / &procs[i] keep their
+ * meaning: kern_table_alloc() hands back one contiguous block.
+ *
+ * The address matters.  0xFE340000 sits right after the zcomp pool
+ * (0xFE300000 + 256 KB) and below CD_IMAGE_VA (0xFE400000), which cd_map()
+ * re-maps on every exec: parking the table there made execve see argc 0
+ * because the image mapping overwrote it.  Budget 0xFE340000..0xFE3FFFFF =
+ * 768 KB; the TCB pool continues at 0xFE3C0000.
+ * 进程表放在内核 VA 窗口而不是 .bss，正是这一点让 NPROC 摆脱了引导器 0x90000
+ * 的天花板；kern_table_alloc() 返回一段连续内存，procs[i] 语义不变。
+ * 地址很关键：0xFE340000 紧跟 zcomp 池（0xFE300000+256KB），且在 CD_IMAGE_VA
+ * （0xFE400000）之下——cd_map() 每次 exec 都会重映射那里，把表放在那儿会让
+ * execve 拿到 argc 0。可用 768KB，TCB 池接在 0xFE3C0000。
+ */
+#define	PROC_TABLE_VA	0xFE340000
+static struct proc	*procs;
 static struct proc	*cur;		/* current process (kernel object) */
 static struct kthread	*cur_thread;	/* current execution flow */
 /* KVFS: forward declaration of the in-flight forwarding waiter (defined in
@@ -324,12 +361,58 @@ switch_pd_for(struct proc *p)
 	return (0);			/* same address space: do not touch CR3 */
 }
 
-static unsigned next_pa = 0x200000;
+static unsigned next_pa;	/* first free physical page, set by main() */
 static unsigned page_alloc(void);
 static void *map_page(unsigned va, unsigned pa);
 static void page_free(unsigned pa);
 static int ucopyin(void *udaddr, void *kaddr, unsigned len);
 static int ucopyout(void *kaddr, void *udaddr, unsigned len);
+
+/* 中文：由 main() 在启动时调用，把 bump 分配器的起点定在内核镜像末尾之后 */
+/* EN: Called by main() at boot: start the bump allocator after the kernel image */
+void
+page_alloc_set_floor(unsigned pa)
+{
+
+	pa = (pa + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+	if (pa < 0x200000)
+		pa = 0x200000;		/* keep the old floor for a small kernel */
+	if (pa > next_pa)
+		next_pa = pa;
+}
+
+/*
+ * Reserve `size` bytes of contiguous physical memory from the bump allocator
+ * and map it at `va` in the kernel's SYSTEM window (VA = KERNBASE + PA is an
+ * identity map, but these tables need a *fixed* VA, so each page is mapped
+ * explicitly).  The process table and the TCB pool are allocated this way so
+ * their capacity is a memory question, not an image-layout question.
+ * 从 bump 分配器预留一段连续物理内存并映射到固定内核 VA。进程表与 TCB 池
+ * 都这样分配，容量只受内存限制，不再受镜像布局限制。
+ */
+void *
+kern_table_alloc(unsigned va, unsigned size)
+{
+	unsigned n = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+	unsigned pa0, pa;
+	unsigned i;
+
+	if (n == 0)
+		return ((void *)va);
+	pa0 = page_alloc();
+	for (i = 1; i < n; i++) {
+		pa = page_alloc();
+		if (pa != pa0 + i * PAGE_SIZE)
+			panic("kern_table_alloc: non-contiguous pages at %x", pa);
+	}
+	for (i = 0; i < n; i++)
+		pmap_map((vm_offset_t)(va + i * PAGE_SIZE),
+		    (vm_offset_t)(pa0 + i * PAGE_SIZE),
+		    (vm_offset_t)(pa0 + (i + 1) * PAGE_SIZE),
+		    VM_PROT_READ | VM_PROT_WRITE);
+	bzero((void *)va, n * PAGE_SIZE);
+	return ((void *)va);
+}
 
 /*
  * Physical page allocator.  New pages come from the bump pointer, but a
@@ -526,6 +609,8 @@ page_alloc(void)
 		return (pa);
 	}
 	pa = next_pa;
+	if (pa == 0)
+		panic("usermode: page_alloc before page_alloc_set_floor");
 	next_pa += PAGE_SIZE;
 	/*
 	 * Dynamic ceiling (was hard-coded 0x3f000000 = ~63MB).  physmem is the
@@ -2673,8 +2758,11 @@ proc_add_thread(struct proc *p, int tid)
 void
 proc_table_init(void)
 {
-	bzero(procs, (unsigned)NPROC * (unsigned)sizeof(struct proc));
-	printf("usermode: %d proc slots\n", NPROC);
+
+	procs = (struct proc *)kern_table_alloc((unsigned)PROC_TABLE_VA,
+	    (unsigned)NPROC * (unsigned)sizeof(struct proc));
+	printf("usermode: %d proc slots at %x (%d KB)\n", NPROC,
+	    PROC_TABLE_VA, (NPROC * sizeof(struct proc)) / 1024);
 }
 
 static struct proc *

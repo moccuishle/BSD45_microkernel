@@ -22,6 +22,7 @@
 
 #define	COM1		0x3f8
 #define	COM1_LSR	(COM1 + 5)
+#define	COM1_SCR	(COM1 + 7)
 
 #define	VGA_COLOR	((u_short *)0xFE0B8000)
 #define	VGA_MONO	((u_short *)0xFE0B0000)
@@ -37,6 +38,30 @@ static u_short *crt_base;
 
 static int	com_present;	/* COM1 really exists (not an unassigned port) */
 
+/*
+ * RAM copy of the console log.  VMware's snapshot (.vmem) does not contain
+ * the VGA aperture - 0xA0000-0xBFFFF belongs to the emulated SVGA device, so
+ * reading 0xB8000 out of a dump always yields zeros and `vmrun captureScreen`
+ * needs VMware Tools.  Keeping the last few KB of console text in ordinary
+ * RAM gives a host-side log channel that needs neither: take a snapshot and
+ * read this buffer (see tools/vm_screen.py --klog).
+ * 控制台日志的 RAM 副本。VMware 的 .vmem 不包含 VGA 显存（0xA0000-0xBFFFF
+ * 属于虚拟 SVGA 设备），快照里读 0xB8000 永远是 0，而 captureScreen 又需要
+ * VMware Tools。把最近几 KB 的控制台文本留在普通内存里，主机侧拍快照即可读。
+ */
+#define	KLOG_SIZE	8192
+char		klog_buf[KLOG_SIZE];
+unsigned	klog_len;
+
+static void
+klog_putc(int c)
+{
+
+	if (klog_len < KLOG_SIZE - 1)
+		klog_buf[klog_len++] = (char)c;
+	klog_buf[klog_len] = 0;
+}
+
 static void	vga_cursor(void);
 
 /*
@@ -45,12 +70,12 @@ static void	vga_cursor(void);
  * return 0xff, which would otherwise look like "LSR: data ready" and make
  * cngetc() return 0xff forever, so the keyboard was never polled.
  */
-/* EN: Reads COM1 LSR: returns 0 if it reads 0xff (no UART mapped) or if (lsr & 0xe0) != 0x60, else 1, meaning a 16550-class port is present. */
-/* 中文：读 COM1 的 LSR：读到 0xff（端口未映射）或 (lsr & 0xe0) != 0x60 时返回 0；否则返回 1，表示存在 16550 类串口。 */
+/* EN: Probes COM1: rejects 0xff (unmapped port), then uses the 16550A scratch register (0x3f8+7) write/read-back test, falling back to the canonical LSR THRE|TEMT pattern. Returns 1 when a UART answers. */
+/* 中文：探测 COM1：读到 0xff（端口未映射）直接判无；再用 16550A 的 scratch 寄存器（0x3f8+7）写读比对，退路是 LSR 的 THRE|TEMT 位型。有 UART 应答返回 1。 */
 static int
 com_probe(void)
 {
-	int lsr = hal_inb(COM1_LSR);
+	int lsr, scr;
 
 #ifdef VM_FORCE_COM1
 	/* VMware verification build: file-backed serial may not present the
@@ -58,12 +83,30 @@ com_probe(void)
 	 * VMware 验证构建：文件型串口探测时可能尚未呈现标准 16550 LSR，强制信任。 */
 	return (1);
 #else
-	if (lsr == 0xff)
+	if (hal_inb(COM1_LSR) == 0xff)
 		return (0);
-	/* THRE and TEMT must both be set, bit 7 (a 16550 has 0 there) clear */
-	if ((lsr & 0xe0) != 0x60)
-		return (0);
-	return (1);
+	/*
+	 * The scratch register exists on the 16550A and on every virtual
+	 * UART (QEMU's serial, VMware's file/pipe-backed port).  It is the
+	 * only probe that works before the port is programmed: VMware's
+	 * file-backed UART reports LSR 0x00 until LCR/FCR have been
+	 * written, which made the old LSR-only probe declare COM1 absent
+	 * and silently drop the whole boot log.
+	 * scratch 寄存器是 16550A 与所有虚拟 UART 都实现的，且不依赖端口
+	 * 是否已初始化——VMware 文件型串口在 LCR/FCR 写入前 LSR 读回 0x00，
+	 * 旧的纯 LSR 探测会误判"没有串口"，整份启动日志被丢弃。
+	 */
+	hal_outb(COM1_SCR, 0xa5);
+	scr = hal_inb(COM1_SCR);
+	hal_outb(COM1_SCR, 0x00);
+	if (scr == 0xa5)
+		return (1);
+
+	/* Fallback for a plain 8250 without SCR. */
+	lsr = hal_inb(COM1_LSR);
+	if ((lsr & 0xe0) == 0x60)
+		return (1);
+	return (0);
 #endif
 }
 
@@ -165,9 +208,14 @@ pccninit(struct consdev *cp)
 		crt_base[i] = (ATTR << 8) | ' ';
 	crt_row = crt_col = 0;
 	vga_cursor();
+	/*
+	 * Program the UART first, then probe it.  Writing LCR/FCR makes a
+	 * virtual UART report a real LSR; probing before that is exactly the
+	 * bug that hid the whole VMware serial log (see com_probe()).
+	 * 先初始化再探测：先写 LCR/FCR，虚拟 UART 才会给出真实的 LSR。
+	 */
+	com_init();
 	com_present = com_probe();
-	if (com_present)
-		com_init();
 	kbd_init();
 	return (0);
 }
@@ -179,6 +227,7 @@ pccnputc(dev_t dev, int c)
 {
 
 	com_putc(c);
+	klog_putc(c);
 	if (c == '\r') {
 		crt_col = 0;
 		vga_cursor();

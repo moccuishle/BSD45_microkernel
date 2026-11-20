@@ -21,7 +21,6 @@
 
 /* ---- current-thread resolution ------------------------------------ */
 extern struct kthread *curk;
-extern struct kthread kthreads[NKTHREAD];
 extern void kthread_block(void);
 extern void kthread_wake(struct kthread *t);
 extern void sched_on_wake(struct kthread *t);

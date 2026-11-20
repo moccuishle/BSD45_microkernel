@@ -228,12 +228,16 @@ pmap_bootstrap(firstaddr, loadaddr)
 extern int IdlePTD;
 
 
-/* disable pageing in basemem for all machines until this cryptic comment
- * can be explained
+/*
+ * Skip base memory below 1 MB: it holds the real-mode boot data and, in this
+ * port, the boot loader plus the staged kernel image.  This used to be an
+ * unconditional `firstaddr = 0x100000`, which silently claimed the first
+ * megabyte - now that the kernel itself is linked at physical 0x101000 the
+ * allocator must start after the image, so only clamp upwards.
+ * 只把起点抬到 1MB 以上，绝不覆盖内核镜像：内核已链接在物理 0x101000。
  */
-#if 1 ||	defined(ODYSSEUS) || defined(ARGO) || defined(CIRCE)
-firstaddr=0x100000;	/* for some reason, basemem screws up on this machine */
-#endif
+if (firstaddr < 0x100000)
+	firstaddr = 0x100000;
 printf("ps %x pe %x ", firstaddr, maxmem <<PG_SHIFT);
 	avail_start = firstaddr;
 	avail_end = maxmem << PG_SHIFT;
@@ -242,7 +246,21 @@ printf("ps %x pe %x ", firstaddr, maxmem <<PG_SHIFT);
 	avail_end -= i386_round_page(sizeof(struct msgbuf));
 
 	mem_size = physmem << PG_SHIFT;
+	/*
+	 * Kernel VA = KERNBASE + physical in the SYSTEM window that locore
+	 * maps identity, so the first free kernel VA is right after the image.
+	 * The 4.4BSD formula below assumed a kernel ending below 1 MB; with
+	 * the image at 0x101000..0x204000 it lands *inside* .text, and the
+	 * CMAP1/CMAP2/vmmap/msgbuf pages allocated there overwrite live code
+	 * (that showed up as TRAP 12 in pmap_enter).
+	 * 内核 VA = KERNBASE + 物理地址（locore 在 SYSTEM 窗口做的恒等映射），
+	 * 空闲内核 VA 从镜像之后开始。4.4BSD 原公式假设内核在 1MB 以下，
+	 * 内核搬到 0x101000..0x204000 后该公式会落进 .text，CMAP1/CMAP2/
+	 * vmmap/msgbuf 因此覆盖活代码（表现为 pmap_enter 里 TRAP 12）。
+	 */
 	virtual_avail = atdevbase + 0x100000 - 0xa0000 + 10*NBPG;
+	if (virtual_avail < (vm_offset_t)(KERNBASE + firstaddr))
+		virtual_avail = (vm_offset_t)(KERNBASE + firstaddr);
 	virtual_end = VM_MAX_KERNEL_ADDRESS;
 	i386pagesperpage = PAGE_SIZE / I386_PAGE_SIZE;
 
