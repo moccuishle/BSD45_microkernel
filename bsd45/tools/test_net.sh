@@ -29,6 +29,7 @@ log="$(run /bin/vfstest)"
 check "vfs roundtrip" "$log" "vfs: transparent roundtrip ok"
 check "vfs eio"       "$log" "vfs: fault isolation ok (EIO)"
 check "vfs restart"   "$log" "vfs: restart ok"
+check "vfs close fwd" "$log" "vfs: close forward ok (20 open/close, no slot leak)"
 check "vfs verdict"   "$log" "vfs: PASS"
 
 # 共享页闭环 / shared-page loop

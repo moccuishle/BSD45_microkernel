@@ -150,6 +150,42 @@ main(void)
 	wait4(srv, &st, 0, 0);
 	printf("vfs: restart ok\n");
 
+	/* ---- 4: close 完整转发验证——服务端槽位确实被释放 ---- */
+	/* 中文：fs_server 的 SRV_CLOSE 会释放服务端文件槽位 files[].used=0，
+	 * 服务端最多 NFILES=16 个槽位。若内核 close 是完整转发（把 SRV_CLOSE
+	 * 发给 fs_server），每次 open/close 循环都会复用同一个服务端槽位，20 次
+	 * 不同文件名的 open 全部成功；若 close 只是旧的"本地假释放"，服务端槽位
+	 * 不回收，第 17 次 open 会因 16 个槽位占满返回 -ENOSPC(28)。以此明确
+	 * 判定 close 是否真正走到内核态转发，而非本地释放 fd。 */
+	{
+		static const char digits[] = "0123456789abcdefghij";
+		char cpath[] = "/srv/closeX";
+		int i, cd = 0, cfd;
+
+		srv = start_server();	/* 干净服务，槽位从 0 开始 */
+		if (srv < 0)
+			return (fail("close-proof restart"));
+		delay(6000000ul);
+
+		for (i = 0; i < 20; i++) {
+			cpath[10] = digits[i];
+			cfd = open(cpath, 0);
+			if (cfd < 0) {
+				printf("vfs: close-proof open %d errno=%d\n", i, errno);
+				cd += fail("close forward (server slot leak)");
+				break;
+			}
+			write(cfd, "x", 1);
+			close(cfd);
+		}
+		if (cd == 0)
+			printf("vfs: close forward ok (20 open/close, no slot leak)\n");
+		bad += cd;
+
+		shutdown_server();
+		wait4(srv, &st, 0, 0);
+	}
+
 	printf("vfs: %s\n", bad ? "FAIL" : "PASS");
 	return (bad ? 1 : 0);
 }

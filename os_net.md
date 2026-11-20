@@ -166,8 +166,12 @@ $env:PATH = "C:\Users\Administrator\.workbuddy\binaries\python\versions\3.13.12;
    已在恢复用户 `edx` 之前完成段设置（§1.5-1）。
 3. `kthread_block_tcb` 对单线程进程只阻塞进程不阻塞主 TCB，`proc_sched()` 的"回落自己"
    分支会立刻恢复它，转发带旧 `eax` 假返回。已同步置 `KT_BLOCK`（§1.5-2）。
-4. fs_server 的 CLOSE 语义是删除文件（tmpfs close=unlink），vfstest 改为同 fd write/read
-   回环验证；内核 virtual fd 的 close 仅本地释放槽位。
+4. fs_server 的 CLOSE 语义是释放服务端文件槽位（`files[idx].used=0`，非删除文件内容），
+   vfstest 用同 fd write/read 回环验证透明读写，另加 **close 完整转发专项用例**：连续
+   20 次不同文件名 open/close，若 close 真把 SRV_CLOSE 转发到服务端，槽位会一直复用、
+   全部成功；若仍为旧的"本地假释放"，16 个服务端槽位会在第 17 次 open 返回 -ENOSPC。
+   S405（2026-11-21）已将 `SYS_close` 从"本地释放虚拟 fd"改为完整阻塞转发
+   （`kvfs_forward(SRV_CLOSE_KERNEL)` + 回调 `kvfs_reply_deliver` 释放槽位并返回 0）。
 5. `nettest` 的失败曾出现一次，为重编译后服务启动等待不足的时序抖动（`delay` 按周期
    计数、内核体积变化会改变实际等待时长），重跑即 PASS，非代码回归。
 

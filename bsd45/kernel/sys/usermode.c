@@ -2207,6 +2207,17 @@ kvfs_reply_deliver(unsigned port, const struct ipc_msg *m)
 				    m->inline_data + sizeof(struct srv_args_kernel),
 				    (unsigned)data_len, 1);
 			result = data_len;	/* read 返回实际字节数 */
+		} else if (p->uk_kvfs_op == SRV_CLOSE_KERNEL) {
+			/* CLOSE：服务已确认关闭，释放等待者的虚拟 fd 槽位。
+			 * close 的 fd 参数保存在 uk_regs.ebx（kvfs_forward 保存了完整
+			 * syscall 上下文），据此定位 KVFS_FD_BASE 起的槽位。返回 0。
+			 * EN: service acknowledged close; release the waiter's virtual
+			 * fd slot (fd is in saved uk_regs.ebx) and return 0. */
+			int slot = (int)p->uk_regs.ebx - KVFS_FD_BASE;
+
+			if (slot >= 0 && slot < KVFS_FD_MAX)
+				p->uk_kvfs_fds[slot] = 0;
+			result = 0;
 		}
 	}
 
@@ -4581,14 +4592,18 @@ bsd45_syscall(struct sysregs *r)
 		int khandle = kvfs_fd_handle(cur, (int)r->ebx);
 
 		if (khandle >= 0) {
-			/* KVFS: 最小原型——本地释放虚拟 fd 槽位，不阻塞转发。
-			 * fs_server 的 close=unlink 语义对透明读写非必需；
-			 * 服务端槽位在服务重启/退出时统一回收，避免阻塞式 close
-			 * 引入第二次 IPC 往返与回调复杂度。 */
-			int slot = (int)r->ebx - KVFS_FD_BASE;
-
-			cur->uk_kvfs_fds[slot] = 0;
-			r->eax = 0;
+			/* KVFS: /srv/ virtual fd -> forward SRV_CLOSE to fs_server.
+			 * Full transparent forwarding like open/read/write: the reply
+			 * callback (kvfs_reply_deliver) releases the virtual fd slot and
+			 * writes eax=0, then wakes us.  Service absent -> -EIO.
+			 * KVFS: /srv/ 虚拟 fd -> 把 SRV_CLOSE 完整转发给 fs_server，
+			 * 与 open/read/write 一样走阻塞转发；回复回调释放虚拟 fd 槽位、
+			 * 写 eax=0 并唤醒。服务不在 -> -EIO。 */
+			if (kvfs_forward(r, SRV_CLOSE_KERNEL, (unsigned)khandle,
+			    0, 0, 0, 0, 0)) {
+				break;		/* blocked; resumed via uk_regs */
+			}
+			r->eax = (unsigned)-EIO;	/* 服务端口无属主 / 已有在途事务 */
 			break;
 		}
 		fd_close((int)r->ebx);
