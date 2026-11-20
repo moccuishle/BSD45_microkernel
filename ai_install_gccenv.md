@@ -224,3 +224,60 @@ foreach ($n in @('http_proxy','https_proxy','no_proxy')) { Remove-Item "env:$n" 
 2. **限时换路**：一个方法卡超过 1 分钟就换（先想"能不能绕过"，再想"怎么修"）
 3. **直接验证**：curl 探文件、`--debug` 看实际 URL、`pacman -Q` 查已装包
 4. **横向对比**：一个源坏了同时测多个备选，选实测能用的
+
+---
+
+## 2026-11-21 新机实测补充：mingw32 下载的坑
+
+> 首次在新机器（全新安装 MSYS2）上执行第 7 步时踩到的新坑，上面坑 8/9 的记录是"当时装成功后的复盘"，但本次实战发现官方源在国内的连接表现与文档描述有出入，补充如下。
+
+### 坑 10：官方源 i686 包 302 跳转 + 极慢，pacman 长时间"无输出"像卡死
+- **现象**：按坑 9 配好 `mirrorlist.mingw32`（官方源第一）后 `-Syy` 正常，`-S --noconfirm --needed mingw-w64-i686-gcc` 也能解析出 19 个包 / 71.43 MiB，但进入 `:: Retrieving packages...` 后**十几分钟没有任何新行输出**，看起来像卡死。
+- **原因**：`repo.msys2.org/mingw/i686/` 对包文件的请求返回 **302 跳转到境外 CDN**，国内直连速度只有几 KB/s ~ 三十几 KB/s。数据库 `.db` 能下（302 前的小文件），但到几十 MB 的 gcc 包就慢到触发 pacman 的 `Operation too slow. Less than 1 bytes/sec` 而失败。这与坑 9 "官方源实测可下载安装成功"并不矛盾——能成功，但在国内可能非常慢甚至反复失败。
+- **判别（别急着杀进程）**：看 `C:\msys64\var\cache\pacman\pkg\*.part` 文件大小是否在增长：
+  ```bash
+  ls -l --time-style=+%H:%M:%S /c/msys64/var/cache/pacman/pkg/*i686*.part
+  sleep 3
+  ls -l --time-style=+%H:%M:%S /c/msys64/var/cache/pacman/pkg/*i686*.part
+  ```
+  只要 `.part` 在变大，说明**没卡死，只是在慢速下载**；若大小不变且随后报 `stream reset by server` / `too slow`，就是源的问题，必须换源。
+
+- **✅ 实测成功的对策（按优先级）**：
+  1. **换用 `mirror.msys2.org` 官方 CDN 前端（关键！）**。它和 `repo.msys2.org` 是同一套官方仓库，但包文件直接返回 200 不跳转，实测 **~560 KB/s，比 repo 快约 15 倍**。把 `mirrorlist.mingw32` 第一行换成：
+     ```
+     Server = https://mirror.msys2.org/mingw/i686/
+     Server = https://repo.msys2.org/mingw/i686/
+     ```
+  2. **把 `pacman.conf` 的 `ParallelDownloads` 从 5 改成 1**。并发下载 i686 包时 `mirror.msys2.org` 会返回 **503**（限流），串行下载即可稳定通过：
+     ```ini
+     ParallelDownloads = 1
+     ```
+  3. **失败后重跑前先清残留**：`rm -f /c/msys64/var/cache/pacman/pkg/*i686*.part`。已完整下载的包会留在缓存里，重跑只补下缺的几个（本次第一次失败后已下 8/19，第二次只补 2.76 MiB 就装成了）。
+  4. 用持久后台任务跑（坑 4），避免被命令结束杀掉。
+  5. 若网络允许，配代理可进一步提速。
+- **重要更正（横向实测 2026-11-21）**：本次把常见镜像的 i686 包路径逐个用 curl 探测，结果与坑 9 一致且更彻底——**国内主流镜像的 i686 路径全部不可用**：
+  | 镜像 | i686 包路径返回 |
+  |------|----------------|
+  | `mirrors.tuna.tsinghua.edu.cn`（TUNA） | 404 |
+  | `mirrors.bfsu.edu.cn`（北外） | 404 |
+  | `mirrors.aliyun.com`（阿里云） | 404 |
+  | `mirrors.cloud.tencent.com`（腾讯云） | 404 |
+  | `mirrors.ustc.edu.cn`（中科大） | 403 |
+  | `mirror.nju.edu.cn`（南大） | 404 |
+  | `mirrors.sjtug.sjtu.edu.cn`（上海交大） | 404 |
+  | `repo.msys2.org`（官方主域） | 200/302，慢（~37 KB/s） |
+  | `mirror.msys2.org`（官方 CDN 前端） | **200，快（~560 KB/s）✅ 推荐** |
+  
+  结论：**i686 工具链只能从官方源下**，国内镜像这条路走不通（逐个 curl 实测，非推测）。但官方有两个域名——`mirror.msys2.org` 是 CDN 前端，速度远好于 `repo.msys2.org`，**优先用它**即可解决问题，不必干等。`mirrorlist.mingw32` 里 TUNA 那行留着也会 404，可删可留（pacman 会自动尝试下一个）。
+
+### 坑 11：`mingw-w64-i686-gcc` 的安装体积远大于直觉
+- **现象**：`pacman -S mingw-w64-i686-gcc` 显示 `Total Download Size: 71.43 MiB`、`Total Installed Size: 461.14 MiB`，19 个包。只是装一套 gcc + binutils，却比 ucrt64 那次（含 qemu，安装 2978 MiB）之外的独立工具链大不少。
+- **原因**：i686 工具链的 binutils/crt/headers/libstdc++ 等全套依赖都是独立的一套（`mingw-w64-i686-*` 前缀），不与 ucrt64 共享，因此需要单独下载 71 MB。
+- **对策**：属正常现象，磁盘空间充足（C 盘 >= 135 GB 空闲）就直接装，无需干预。若磁盘紧张，注意这套会再占约 461 MB。
+
+### 本次完整安装验证结果（2026-11-21）
+- ucrt64/bin：`gcc 16.2.0`、`qemu-system-x86_64 11.1.3`、`objcopy/ld 2.47`
+- usr/bin（msys 版）：`bison 3.8.2`、`flex 2.6.4`、`xorriso 1.5.8.pl02`
+- mingw32/bin：`gcc 16.2.0`、`objcopy 2.47`、`ld 2.47`（均已验证）
+- 全流程避坑要点已在上文覆盖：**SigLevel=Never（坑1/2）、TUNA 仅用于 ucrt64/msys（坑3）、持久后台任务（坑4）、msys 装 bison/flex（坑5）、mingw32 独立源 + mirror.msys2.org 优先 + 并发降 1 + -Syy（坑8/9/10/11）**。
+- mingw32 安装最终结果：**成功**，19 个包全部装齐（经 3 次尝试：官方主域太慢→换 CDN 前端→并发降 1 解决 503）。
