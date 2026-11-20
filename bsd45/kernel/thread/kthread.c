@@ -150,7 +150,7 @@ kthread_spawn(const char *name, void (*entry)(void *), void *arg)
 		return (0);
 	bzero(t, sizeof(*t));
 	t->t_state = KT_RUN;
-	t->t_tid = i + 1;
+	t->t_tid = TID_KERN_BASE + i;	/* high range: never collides with pid/tid */
 	t->t_name = name;
 	t->t_entry = entry;
 	t->t_arg = arg;

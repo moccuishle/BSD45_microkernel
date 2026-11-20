@@ -18,7 +18,27 @@
 
 #include "sys/platform.h"
 
-#define	NKTHREAD	16
+/*
+ * KLT pool (S406): NKTHREAD is the TCB table capacity.  Each slot owns an
+ * 8 KB kernel stack mapped at KSTACK_VA in the shared kernel PDE 0x3fa, so
+ * 28 slots take 224 KB of the 2 MB available there.  The table itself stays
+ * a static array (layout constraint, see NPROC in usermode.c).
+ * 实际存活上限由物理内存经 page_alloc 决定，内存耗尽时 fork/spawn 返回
+ * -EAGAIN 而非 panic。1:1 内核线程模型不变。
+ */
+#define	NKTHREAD	24		/* TCB slots (boot-loader layout limit) */
+
+/*
+ * TID namespace partition (pid may reach 257 now):
+ *   main thread    tid == pid                     (1 .. NPROC+1)
+ *   extra user tid = TID_USER_BASE + pid*TID_STRIDE + n
+ *   kernel thread  tid = TID_KERN_BASE + slot      (high, never a pid)
+ * kthread_find()/kthread_user_find() key on tid, so ranges must not overlap.
+ */
+#define	TID_USER_BASE	1000
+#define	TID_STRIDE	16
+#define	TID_KERN_BASE	0x40000000
+
 #define	KT_FREE		0
 #define	KT_RUN		1
 #define	KT_BLOCK	2

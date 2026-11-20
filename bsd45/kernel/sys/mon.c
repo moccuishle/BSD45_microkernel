@@ -343,6 +343,16 @@ monitor(void)
 	else
 		printf("AUTOINSTALL: FAILED\n");
 #endif
+#ifdef VM_PROCTEST_AUTOTEST
+	/* verification build only: run the dynamic process-count stress test
+	 * without a keyboard; console is captured to the VMware serial file.
+	 * VMware 验证构建：免键盘自动运行动态进程数压力测试，控制台捕获到串口文件。 */
+	printf("AUTOTEST: launching /bin/proctest via init script\n");
+	/* Go through init->sh -c so execve() does the path/name lookup, exactly
+	 * like the interactive `shell|/bin/vfstest` flow that is known to work. */
+	start_userland("/bin/proctest");
+	/* start_userland enters user mode and does not return. */
+#endif
 
 	for (;;) {
 		printf("bsd45> ");

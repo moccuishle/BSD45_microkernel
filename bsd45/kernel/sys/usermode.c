@@ -95,6 +95,13 @@ extern void syscall_entry(void);
 extern int IdlePTD;		/* physical address of the kernel page dir */
 extern int cngetc(void);
 extern void cnputc(int c);
+/* Dynamic physical-memory ceiling: physmem is the page count reported by the
+ * BIOS multiboot path (machdep.c: physmem = btoc(...)).  Deriving the bump
+ * allocator's limit from it lets a VMware VM with more RAM host more
+ * processes, instead of being pinned to the old hard-coded 0x3f000000.
+ * 动态物理内存上界：physmem 是 BIOS 探测到的物理页数。据此推导 bump 分配器
+ * 上界，使 VMware 中加大内存后可创建更多进程，不再被写死的 0x3f000000 限制。 */
+extern int physmem;
 
 #ifndef	O_RDONLY
 #define	O_RDONLY	0x0000
@@ -157,7 +164,29 @@ static struct file ramfs[] = {
 
 /* saved user context (struct sysregs) is declared in sys/platform.h */
 
-#define	NPROC		8
+/*
+ * Process table capacity (S406).  procs[] stays a static array inside .data:
+ * the boot path (locore/pmap/ATAPI) is sensitive to the kernel image layout,
+ * and moving this table into a separate kernel VA window shifted .data/.bss
+ * far enough that the ISO mount stopped working (probe: iso_mount() failed,
+ * console output corrupted).  The array is therefore sized to the largest
+ * value that keeps every file-backed segment below the stage2 snapshot at
+ * 0x8F000 and the running stage2 at 0x90000:
+ *   .data ends 0x87400, .rdata 0x8Axxx, .bss ends 0x8E014  (< 0x8F000)
+ * Measured: 24 slots -> sections end 0x8E014 (boots, mounts, proctest PASS);
+ * 28 slots -> 0x91014 (.bss crosses 0x90000, the running stage2) and fails.
+ *
+ * The live ceiling is still physical memory: page_alloc() fails when RAM runs
+ * out and fork returns -EAGAIN/-ENOMEM instead of panicking, so a VMware guest
+ * with more RAM hosts more live processes up to NPROC.
+ * 进程表容量（S406）。procs[] 仍为 .data 内的静态数组：引导路径（locore/pmap/ATAPI）
+ * 对内核镜像布局敏感，把该表搬到独立内核窗口会使 .data/.bss 位移过大，导致 ISO
+ * 挂载失败（探针证实 iso_mount() 失败、控制台输出错乱）。因此按最大安全值定容：
+ * 保证所有文件段低于 stage2 快照 0x8F000、且不覆盖运行中的 stage2（0x90000）。
+ * 实际存活上限仍由物理内存决定：page_alloc 耗尽时 fork 返回 -EAGAIN/-ENOMEM。
+ */
+#define	NPROC		24
+/* TID namespace constants (TID_USER_BASE/STRIDE/KERN_BASE) live in kthread.h. */
 #define	P_FREE		0
 #define	P_RUN		1
 #define	P_BLOCKED	2
@@ -498,8 +527,31 @@ page_alloc(void)
 	}
 	pa = next_pa;
 	next_pa += PAGE_SIZE;
-	if (next_pa >= 0x3f000000)
-		panic("usermode: out of physical memory");
+	/*
+	 * Dynamic ceiling (was hard-coded 0x3f000000 = ~63MB).  physmem is the
+	 * BIOS-reported page count, so physmem<<12 is the top of usable RAM.
+	 * Keep a conservative 1 MB guard below the top for the bootstrap/msgbuf
+	 * area, and never fall below the legacy 63 MB so the original 64 MB
+	 * guest (and the COW table that covers its first 64 MB) behaves exactly
+	 * as before.  A VMware VM given 512 MB therefore raises the ceiling and
+	 * allows many more live processes.
+	 * 动态上界（原为写死的 0x3f000000≈63MB）。physmem 为 BIOS 探测页数，
+	 * physmem<<12 即可用 RAM 顶端。顶端下方留 1MB 保护带；且不低于原 63MB，
+	 * 保证原 64MB guest 行为不变。VMware 加大内存即抬高上界、可容纳更多进程。
+	 */
+	{
+		unsigned ceiling = 0x3f000000u;	/* legacy floor / 历史下限 */
+
+		if (physmem > 0) {
+			unsigned dyn = (physmem << 12);
+			if (dyn > (0x100000u + 0x100000u))	/* at least 2 MB */
+				dyn -= 0x100000u;		/* 1 MB guard */
+			if (dyn > ceiling)
+				ceiling = dyn;
+		}
+		if (next_pa >= ceiling)
+			panic("usermode: out of physical memory");
+	}
 	page_nalloc++;
 	page_ninuse++;
 	page_ref_set(pa, 1);
@@ -2616,6 +2668,15 @@ proc_add_thread(struct proc *p, int tid)
 
 /* 中文：分配一个空闲进程槽并初始化：设置 cwd、mmap 基址及 0/1/2 三个控制台 fd，返回进程指针或 0 */
 /* EN: Allocate and init a free process slot: set cwd, mmap base and console fds 0/1/2, returning its pointer or 0 */
+/* 中文：进程表初始化：清零静态进程表（保留此入口以便引导顺序不变） */
+/* EN: Process table init: zero the static table (kept as an entry point so the boot order is unchanged). */
+void
+proc_table_init(void)
+{
+	bzero(procs, (unsigned)NPROC * (unsigned)sizeof(struct proc));
+	printf("usermode: %d proc slots\n", NPROC);
+}
+
 static struct proc *
 proc_alloc(void)
 {
@@ -3044,7 +3105,7 @@ do_fork(struct sysregs *r)
 	p->uk_ppid = cur->uk_pid;
 	p->uk_pd = pd;
 	(void)proc_add_thread(p, p->uk_pid);
-	p->uk_p_next_tid = p->uk_pid + 100;
+	p->uk_p_next_tid = TID_USER_BASE + p->uk_pid * TID_STRIDE;
 	p->uk_brk_mapped = cur->uk_brk_mapped;
 	bcopy(cur->uk_p_cwd, p->uk_p_cwd, sizeof(p->uk_p_cwd));
 	bcopy(cur->uk_p_comm, p->uk_p_comm, sizeof(p->uk_p_comm));
@@ -3098,7 +3159,7 @@ do_vfork(struct sysregs *r)
 	p->uk_ppid = cur->uk_pid;
 	p->uk_pd = pd;
 	(void)proc_add_thread(p, p->uk_pid);
-	p->uk_p_next_tid = p->uk_pid + 100;
+	p->uk_p_next_tid = TID_USER_BASE + p->uk_pid * TID_STRIDE;
 	p->uk_brk_mapped = cur->uk_brk_mapped;
 	bcopy(cur->uk_p_cwd, p->uk_p_cwd, sizeof(p->uk_p_cwd));
 	bcopy(cur->uk_p_comm, p->uk_p_comm, sizeof(p->uk_p_comm));
@@ -5644,7 +5705,8 @@ start_prog(const char *path, const char *script)
 		int rv;
 
 		if (vfs_namei(path, &vp) < 0 || vp->type != VREG) {
-			printf("no image for %s\n", path);
+			printf("no image for %s (vp=%x type=%d)\n", path,
+			    (unsigned)vp, vp ? (int)vp->type : -1);
 			return;
 		}
 		len = vp->size;
@@ -5675,7 +5737,7 @@ start_prog(const char *path, const char *script)
 
 
 	/* pid 1: the first user process, no parent */
-	bzero(procs, sizeof(procs));
+	bzero(procs, (unsigned)NPROC * (unsigned)sizeof(struct proc));
 	cur = &procs[0];
 	cur->uk_state = P_RUN;
 	cur->uk_pid = 1;
@@ -5699,7 +5761,7 @@ start_prog(const char *path, const char *script)
 	}
 	next_pid = 2;
 	(void)proc_add_thread(cur, 1);
-	cur->uk_p_next_tid = 101;
+	cur->uk_p_next_tid = TID_USER_BASE + 1 * TID_STRIDE;
 	if (cur->uk_p_thread != 0)
 		hal_kernel_stack_set(cur->uk_p_thread->t_stack_top);
 

@@ -1,0 +1,47 @@
+.encoding = "windows-1252"
+config.version = "8"
+virtualHW.version = "12"
+displayName = "BSD45-ELF-x86"
+guestOS = "other"
+memsize = "512"
+numvcpus = "1"
+
+# El Torito CD (the ISO contains an ELF32 kernel, not a PE image)
+ide1:0.present = "TRUE"
+ide1:0.deviceType = "cdrom-image"
+ide1:0.fileName = "..\out\BSD45-ELF-x86.iso"
+ide1:0.startConnected = "TRUE"
+
+usb.present = "FALSE"
+
+# The guest kernel has no USB stack: it polls the legacy 8042 keyboard
+# controller.  VMware 17 defaults to a virtual USB keyboard, which the
+# guest would never see, so force the PS/2 (i8042) keyboard/mouse.
+keyboard.vusb.enable = "FALSE"
+mouse.vusb.enable = "FALSE"
+keyboard.allowBothIRQs = "FALSE"
+
+bios.bootOrder = "cdrom"
+bios.hddOrder = ""
+
+# Uncomment to capture the serial console (useful when debugging boot):
+serial0.present = "TRUE"
+serial0.fileType = "file"
+serial0.fileName = "serial.log"
+extendedConfigFile = "BSD45-proctest.vmxf"
+virtualHW.productCompatibility = "hosted"
+ide0:0.present = "FALSE"
+floppy0.present = "FALSE"
+ethernet0.present = "FALSE"
+sound.present = "FALSE"
+vmxstats.filename = "BSD45-ELF-x86.scoreboard"
+numa.autosize.cookie = "10001"
+numa.autosize.vcpu.maxPerVirtualNode = "1"
+uuid.bios = "56 4d 2a 8f d9 21 cf aa-96 b7 65 55 62 3a ed e2"
+uuid.location = "56 4d 2a 8f d9 21 cf aa-96 b7 65 55 62 3a ed e2"
+svga.vramSize = "134217728"
+vmotion.checkpointFBSize = "134217728"
+vmotion.checkpointSVGAPrimarySize = "134217728"
+monitor.phys_bits_used = "42"
+cleanShutdown = "FALSE"
+softPowerOff = "FALSE"

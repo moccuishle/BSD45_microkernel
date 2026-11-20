@@ -279,7 +279,7 @@ ld -m elf_i386 -Ttext 0x08048000 -e _start -o "$elf" "${objs[@]}" "$libgcc" || {
 echo "built $elf ($(stat -c%s "$elf" 2>/dev/null || wc -c < "$elf") bytes)"
 
 if [ "$target" = "sh" ]; then
-    for tool in echo ls cat mkdir kill sleep rm cp mv wc grep head tail df mount ps uname true false date vmstat mmaptest subtest pthread schedtest pthpreempt aiotest uring spin cowtest crash badptr ipctest fs_server srvtest devfs_server devtest shmtest vfstest netsrv nettest; do
+    for tool in echo ls cat mkdir kill sleep rm cp mv wc grep head tail df mount ps uname true false date vmstat mmaptest subtest pthread schedtest pthpreempt aiotest uring spin cowtest crash badptr ipctest fs_server srvtest devfs_server devtest shmtest vfstest proctest netsrv nettest; do
         tobj="$obj/$tool.o"
         if compile_c "$ws/libexec/$tool.c" "$tobj"; then
             ld -m elf_i386 -Ttext 0x08048000 -e _start -o "$outd/$tool.elf" \

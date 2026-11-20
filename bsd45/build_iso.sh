@@ -6,8 +6,8 @@ ws="$(cd "$(dirname "$0")" && pwd)"
 
 kernel="${1:-$ws/build/bsd45.elf}"
 out_iso="${2:-$ws/out/BSD45-ELF-x86.iso}"
-# Keep in sync with build_iso.ps1 default (4096).
-kernel_lba="${3:-4096}"
+# Keep in sync with build_iso.ps1 default (8192).
+kernel_lba="${3:-8192}"
 bld="$ws/build"
 boot="$ws/boot"
 out="$ws/out"
@@ -72,7 +72,7 @@ for pair in "sh:bin/SH.ELF" "init:sbin/INIT.ELF" "hello:HELLO.ELF" "test:TEST.EL
             "ipctest:bin/IPCTEST.ELF" \
             "fs_server:bin/FSSRV.ELF" "srvtest:bin/SRVTEST.ELF" \
             "devfs_server:bin/DEVFS.ELF" "devtest:bin/DEVTEST.ELF" \
-            "shmtest:bin/SHMTEST.ELF" "vfstest:bin/VFSTEST.ELF" \
+            "shmtest:bin/SHMTEST.ELF" "vfstest:bin/VFSTEST.ELF" "proctest:bin/PROCTEST.ELF" \
             "netsrv:bin/NETSRV.ELF" "nettest:bin/NETTEST.ELF" \
             "aiotest:bin/AIOTEST.ELF" "uring:bin/uring.ELF"; do
     name="${pair%%:*}"; dst="${pair#*:}"

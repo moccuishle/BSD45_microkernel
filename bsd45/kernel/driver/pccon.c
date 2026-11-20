@@ -52,12 +52,19 @@ com_probe(void)
 {
 	int lsr = hal_inb(COM1_LSR);
 
+#ifdef VM_FORCE_COM1
+	/* VMware verification build: file-backed serial may not present the
+	 * canonical 16550 LSR (0x60) at probe time, so trust it unconditionally.
+	 * VMware 验证构建：文件型串口探测时可能尚未呈现标准 16550 LSR，强制信任。 */
+	return (1);
+#else
 	if (lsr == 0xff)
 		return (0);
 	/* THRE and TEMT must both be set, bit 7 (a 16550 has 0 there) clear */
 	if ((lsr & 0xe0) != 0x60)
 		return (0);
 	return (1);
+#endif
 }
 
 /* EN: Returns the cached com_present flag that pccninit() stored from com_probe(); it performs no COM1 access itself. */
@@ -105,8 +112,14 @@ com_ready(void)
 static void
 com_putc(int c)
 {
+#ifdef VM_FORCE_COM1
+	/* VMware verification build: write unconditionally; the file-backed
+	 * UART may not assert THRE the way com_ready() expects. */
+	hal_outb(COM1, c);
+#else
 	if (com_ready())
 		hal_outb(COM1, c);
+#endif
 }
 
 /* EN: Programs COM1 for polled output: interrupts off, divisor 1 (115200 baud), 8N1 framing, FIFO enabled (0xc7), and asserts DTR|RTS (0x03). */

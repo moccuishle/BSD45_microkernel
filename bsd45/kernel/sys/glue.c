@@ -54,6 +54,8 @@ extern char	etext[], edata[], end[];
 
 void	monitor(void);
 void	aio_user_init(void);
+void	proc_table_init(void);
+extern void	hal_outb(int, int);		/* shared-window proc table (usermode.c) */
 int	pccom_present(void);
 void	reboot_now(void);
 int	user_page_fault(unsigned va, unsigned err);
@@ -409,6 +411,7 @@ main(vm_offset_t firstaddr)
 	 * plain tick source.
 	 */
 	kthread_init();
+	proc_table_init();		/* shared-window proc table (before pmap_create) */
 	softirq_init();
 	vfs_aio_init();
 	aio_user_init();
