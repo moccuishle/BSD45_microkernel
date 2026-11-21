@@ -186,24 +186,32 @@ static struct file ramfs[] = {
  *   - procs[] is no longer part of .bss: it lives in the PROC_TABLE_VA
  *     window, backed by pages taken from the bump allocator, so the table
  *     costs zero bytes in the image the BIOS has to stage;
- *   - stage 2's ELF-header snapshot moved from 0x8F000 to 0x300000, above
- *     1 MB, so .bss has the whole 0x10000..0x90000 range to itself;
+ *   - stage 2's ELF-header snapshot moved above 1 MB (0x8F000 -> 0x600000)
+ *     and the kernel itself is linked at physical 0x101000 (S408), so .bss
+ *     is no longer confined to the 0x10000..0x90000 hole at all;
  *   - zero-initialised statics really do land in .bss now (build_kernel.ps1
  *     used to silently skip tools/pe_bss_fix.py because `Get-Command python`
  *     resolved to the Microsoft Store stub, inflating the image to 618 KB -
  *     more than the 576 KB the BIOS can stage).
  *
- * NPROC x sizeof(struct proc) = 256 x 1808 = 452 KB of kernel VA (not image),
- * and the live ceiling is physical memory: page_alloc() fails when RAM runs
- * out and fork returns -EAGAIN/-ENOMEM instead of panicking.
+ * NPROC x sizeof(struct proc) = 256 x 1808 = 452 KB of kernel VA (not image).
+ * Two ceilings remain: the slot table (fork returns -EAGAIN when it is full)
+ * and physical memory (page_alloc() panics - there is no swapper to page
+ * out to, so running out of RAM is a kernel bug, not a per-process error;
+ * with S408's BIOS/E801 detection a 512 MB guest really does hand out
+ * 511 MB, which proctest's 75 MB phase exercises).
  * 进程表容量（S407）。旧的 24 是**引导器**上限：.bss 必须在 0x90000 的 stage2
  * 之下（INT 13h 也不写 0xA0000 以上，暂存镜像上限 576KB），24 x 1808 刚好塞满。
  * 现在两个约束都没了：procs[] 不再属于 .bss，而在 PROC_TABLE_VA 窗口里（物理页
- * 由 bump 分配器预留，镜像里零字节）；stage2 的 ELF 头快照从 0x8F000 搬到
- * 1MB 以上的 0x300000，.bss 独占 0x10000..0x90000；而且零初始化静态量现在真
- * 的进 .bss（过去 `Get-Command python` 命中应用商店桩，pe_bss_fix.py 被静默
- * 跳过，镜像涨到 618KB，超过 BIOS 能暂存的 576KB）。
- * 实际存活上限仍由物理内存决定：page_alloc 耗尽时 fork 返回 -EAGAIN/-ENOMEM。
+ * 由 bump 分配器预留，镜像里零字节）；stage2 的 ELF 头快照搬到 1MB 以上
+ * （0x8F000 → 0x600000），内核本身也链接在物理 0x101000（S408），.bss 完全不
+ * 再受 0x10000..0x90000 那块空洞限制；而且零初始化静态量现在真的进 .bss
+ * （过去 `Get-Command python` 命中应用商店桩，pe_bss_fix.py 被静默跳过，镜像
+ * 涨到 618KB，超过 BIOS 能暂存的 576KB）。
+ * 仍有两个上限：槽位表满时 fork 返回 -EAGAIN；物理内存耗尽时 page_alloc 会
+ * panic——本端口没有 swap，内存耗尽是内核缺陷而不是单进程错误。S408 的
+ * BIOS/E801 探测让 512MB guest 真的能发放 511MB，proctest 的 75MB 阶段就是
+ * 在验证这一点。
  */
 #define	NPROC		256		/* process slots (was 24: loader layout) */
 /* TID namespace constants (TID_USER_BASE/STRIDE/KERN_BASE) live in kthread.h. */
@@ -414,12 +422,6 @@ kern_table_alloc(unsigned va, unsigned size)
 	return ((void *)va);
 }
 
-/*
- * Physical page allocator.  New pages come from the bump pointer, but a
- * freed page is pushed on a LIFO free list (the page itself stores the next
- * link, reached through the scratch window), so open/close/exec loops reuse
- * memory instead of growing the pool without bound.
- */
 static void sig_deliver(struct proc *, struct sysregs *);
 static int console_fg_pgrp;
 
@@ -428,13 +430,34 @@ static unsigned page_nalloc, page_nfree, page_ninuse;
 
 /*
  * COW reference counts (os.md mechanism 2/3).  One byte per physical page.
- * 16384 entries cover the 64 MB guest used by the test harness; pages above
- * that are not COW-shared (page_index()==0 leaves them unaccounted).
- * Keep this table small: the PE/ELF boot loader stages the kernel at
- * 0x10000, and stage 2 lives at 0x90000, so .data must stay below it.
+ *
+ * The table used to be a .bss array covering only the first 64 MB
+ * (1 << 14 entries): with the kernel staged below 1 MB, .bss had to end
+ * below stage 2 at 0x90000, so a bigger table would not have fitted.  That
+ * silently broke COW on a 512 MB guest once allocations crossed 64 MB -
+ * page_index() returned 0, page_ref_inc() became a no-op and page_put()
+ * freed a page another process still mapped.
+ *
+ * Now the kernel is linked at physical 0x101000 (see boot/i386/kernel.ld),
+ * so .bss no longer constrains the table; but a fixed 4 GB table would cost
+ * 1 MB of RAM in every guest.  Instead page_ref_init() sizes it from the
+ * BIOS-reported physmem and maps it into PAGE_REF_VA, so the table grows
+ * with the machine and costs 1 byte per page (512 MB guest -> 128 KB).
+ * Calls made before page_ref_init() runs (bootstrap tables) see page_ref ==
+ * 0 and are simply not refcounted; nothing is COW-shared that early.
+ * COW 引用计数表。过去是 .bss 里只覆盖前 64MB 的数组（内核暂存在 1MB 以下，
+ * .bss 必须在 0x90000 的 stage2 之前结束，更大的表放不下），512MB guest 一旦
+ * 分配超过 64MB，page_index() 返回 0，page_ref_inc() 变成空操作，page_put()
+ * 就会释放别的进程还在映射的页。现在内核链接在物理 0x101000，.bss 不再限制
+ * 表的大小；但固定 4GB 表会在每个 guest 里白占 1MB，所以改由 page_ref_init()
+ * 按 BIOS 探测到的 physmem 定容并映射到 PAGE_REF_VA：表随机器大小增长，每页
+ * 1 字节（512MB guest 只需 128KB）。在它之前发生的分配（引导期表）看到
+ * page_ref == 0，不做引用计数——那个阶段还没有任何 COW 共享。
  */
-#define	MAX_PHYS_PAGES	(1u << 14)
-static unsigned char	page_ref[MAX_PHYS_PAGES];
+#define	PAGE_REF_VA	0xFE900000	/* 1 MB window: 1 byte/page -> 4 GB */
+#define	PAGE_REF_MAX	(1u * 1024 * 1024)
+static unsigned char	*page_ref;	/* one refcount byte per physical page */
+static unsigned	page_ref_pages;		/* entries actually mapped */
 unsigned	cow_faults;
 unsigned	cow_copies;
 unsigned	cow_shared;
@@ -446,7 +469,9 @@ page_index(unsigned pa)
 {
 	unsigned i = pa >> 12;
 
-	return (i < MAX_PHYS_PAGES ? i : 0);
+	if (page_ref == 0 || i >= page_ref_pages)
+		return (0);
+	return (i);
 }
 
 /* 中文：设置物理页的 COW 引用计数值，超出表范围则忽略 */
@@ -495,6 +520,37 @@ page_put(unsigned pa)
 	if (i != 0)
 		page_ref[i] = 0;
 	page_free(pa);
+}
+
+/*
+ * Size and map the COW refcount table for this machine.  Called once from
+ * main() right after page_alloc_set_floor(), i.e. before the first user
+ * page can be shared.  The window is 1 MB (4 GB of RAM, the 32-bit limit);
+ * the table costs one byte per page, so a 512 MB guest maps 128 KB and a
+ * 4 GB guest maps the full 1 MB.  Pages allocated while the table is being
+ * set up are not refcounted (page_ref is still 0), which is exactly right:
+ * they are permanent kernel tables and are never COW-shared.
+ * 按本机内存为 COW 引用计数表定容并映射。由 main() 在 page_alloc_set_floor()
+ * 之后调用一次，早于任何用户页被共享。窗口 1MB（覆盖 4GB，即 32 位上限），
+ * 表每页 1 字节：512MB guest 映射 128KB，4GB guest 恰好用满 1MB。建表期间分配
+ * 的页不做引用计数（此时 page_ref 仍为 0），这正是期望行为——它们是永不共享
+ * 的内核表。
+ */
+void
+page_ref_init(void)
+{
+	unsigned pages, bytes;
+
+	pages = (physmem > 0) ? (unsigned)physmem : (0x4000000u >> 12);
+	if (pages > PAGE_REF_MAX)
+		pages = PAGE_REF_MAX;
+	bytes = pages * (unsigned)sizeof(unsigned char);
+	bytes = (bytes + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+	(void)kern_table_alloc((unsigned)PAGE_REF_VA, bytes);
+	page_ref_pages = pages;
+	page_ref = (unsigned char *)(unsigned)PAGE_REF_VA;
+	printf("usermode: COW refcount %d pages (%d KB) at %x\n",
+	    pages, bytes / 1024, PAGE_REF_VA);
 }
 
 #define	CD_IMAGE_VA	0xFE400000	/* kernel window for a file read from CD */
@@ -659,6 +715,23 @@ page_free(unsigned pa)
 	page_nfree++;
 	if (page_ninuse > 0)
 		page_ninuse--;
+}
+
+/*
+ * Physical-page accounting snapshot, printed when the kernel goes idle.
+ * The interesting number is page_ninuse: it must stay flat across repeated
+ * fork/exit churn (kernel stacks, page tables and TCBs are all recycled),
+ * and `next free' only moves when the bump allocator really had to grow.
+ * 内核转入空闲时打印的物理页账目。关键是 page_ninuse：反复 fork/exit 之后它
+ * 必须保持平稳（内核栈、页表、TCB 都会被回收），只有 bump 分配器真正扩张时
+ * “next free” 才会前进。
+ */
+static void
+mem_report(void)
+{
+
+	printf("mem: %d pages in use, %d allocated, next free %x\n",
+	    page_ninuse, page_nalloc, next_pa);
 }
 
 /*
@@ -2930,6 +3003,17 @@ proc_sched(void)
 		if (kthread_runnable())
 			continue;
 		printf("\n[no runnable process]\n");
+		/*
+		 * Idle report: physical pages still held when the last process
+		 * exits.  Fork/exit churn is only visible here - a per-spawn leak
+		 * (kstack_alloc used to map a fresh 8 KB stack every time and
+		 * never release it) shows up as page_ninuse growing with the
+		 * number of forks while next_pa stays put.
+		 * 停机报告：最后一个进程退出时仍占用的物理页。fork/exit 抖动只在
+		 * 这里可见——每次 spawn 都新分配 8KB 内核栈且从不归还时，
+		 * page_ninuse 会随 fork 次数增长而 next_pa 不动。
+		 */
+		mem_report();
 		for (;;)
 			hal_cpu_halt();
 	}
@@ -3335,6 +3419,7 @@ proc_exit(int code)
 	cur->uk_state = reaped ? P_FREE : P_ZOMBIE;
 	if (cur->uk_ppid == 0) {
 		printf("\n[user exit %d]\n", code);
+		mem_report();		/* the whole workload is gone: idle snapshot */
 		for (;;)
 			hal_cpu_halt();
 	}

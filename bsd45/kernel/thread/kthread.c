@@ -120,21 +120,61 @@ kthread_trampoline(void)
 	kthread_exit();
 }
 
-/* 中文：为第 i 个内核线程分配内核栈，逐页分配物理页并建立读写映射 */
-/* EN: Allocate a kernel stack for thread slot i, allocating pages and mapping them read/write */
+/*
+ * Kernel stacks are per TCB slot and mapped exactly once.
+ *
+ * Each slot owns a fixed 8 KB window at KSTACK_VA + i*KSTACK_SIZE, so a slot
+ * that is handed out again does not need new physical pages: the previous
+ * thread's frames are simply wiped.  Before this, kstack_alloc() called
+ * vfs_page_alloc() on *every* spawn and nothing ever returned those pages -
+ * a fork/exit cycle leaked 8 KB each time (200 sequential forks = 1.6 MB,
+ * and page tables/TCBs were recycled fine, so only the idle page counter
+ * revealed it).  Caching bounds kernel-stack memory at NKTHREAD*8 KB = 2 MB
+ * and makes churn allocation-free after the first pass.
+ *
+ * The pages are deliberately not unmapped on thread exit: a user thread
+ * frees its own TCB while still running on that very stack (kthread_exit /
+ * thread_exit_current), so returning the pages there would free memory in
+ * active use.  Deferred reclamation would buy back at most 2 MB on a
+ * multi-hundred-MB guest - not worth a use-after-free risk.
+ * 内核栈按 TCB 槽位分配一次即固定复用：每个槽位独占 KSTACK_VA + i*8KB 这段
+ * 8KB 窗口，重新分配时只要把上一个线程留下的栈帧清零，无需再取物理页。此前
+ * 每次 spawn 都调 vfs_page_alloc() 且从不归还，一个 fork/exit 周期泄漏 8KB
+ * （200 次顺序 fork = 1.6MB；页表与 TCB 都正常回收，只有空闲页计数能暴露）。
+ * 缓存后内核栈上限固定为 NKTHREAD*8KB = 2MB，抖动期零分配。
+ * 故意不在线程退出时解除映射：用户线程释放自己的 TCB 时仍运行在该栈上
+ * （kthread_exit / thread_exit_current），此时归还页面等于释放正在使用的内存。
+ * 延迟回收最多只能拿回 2MB，不值得冒 use-after-free 的风险。
+ */
+static unsigned char	kstack_mapped[NKTHREAD];
+
+/*
+ * Map (or reuse) the kernel stack for TCB slot i.  Returns 0, or -1 for a
+ * slot index outside the pool.
+ * 为第 i 个槽位映射（或复用）内核栈；槽位越界返回 -1。
+ */
 static int
 kstack_alloc(int i)
 {
-	unsigned char *va = (unsigned char *)(KSTACK_VA + i * KSTACK_SIZE);
+	unsigned char *va;
 	unsigned pa;
 	int j;
 
+	if (i < 0 || i >= NKTHREAD)
+		return (-1);
+	va = (unsigned char *)(KSTACK_VA + i * KSTACK_SIZE);
+	if (kstack_mapped[i]) {
+		/* Reused slot: drop the previous thread's frames. */
+		bzero(va, KSTACK_SIZE);
+		return (0);
+	}
 	for (j = 0; j < KSTACK_SIZE; j += PAGE_SIZE) {
 		pa = vfs_page_alloc();
 		pmap_map((vm_offset_t)(va + j), (vm_offset_t)pa,
 		    (vm_offset_t)pa + PAGE_SIZE,
 		    VM_PROT_READ | VM_PROT_WRITE);
 	}
+	kstack_mapped[i] = 1;
 	return (0);
 }
 
@@ -148,6 +188,7 @@ kthread_init(void)
 	if (kthreads == 0)
 		kthread_table_init();
 	bzero(kthreads, NKTHREAD * sizeof(struct kthread));
+	bzero(kstack_mapped, sizeof(kstack_mapped));	/* no stack mapped yet */
 	curk = 0;
 	sched_esp = 0;
 	kthread_switches = 0;

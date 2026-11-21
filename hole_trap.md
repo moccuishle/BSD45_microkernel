@@ -41,3 +41,44 @@
   1. 正常环境：重跑一次完整 `build_kernel.ps1` 即可（它会无条件重编 embed.o）。**分步/带 `-Only` 编译时最容易漏掉 embed.o**，检查 `ls -l build/embed.o` 应约 22 KB。
   2. 编译器跑不起来时（cc1 被拦但 `as.exe` 可用）：`python tools/embedc_to_s.py build/embed.c build/embed_new.s && as --32 -o build/embed.o build/embed_new.s`，把 `embed.c` 的数组重新汇编成目标文件，不需要编译器。
 - **验证**：链接后核对 `_stage1_hdd_bin_len` 应为 512、`_stage2_bin_len` 应为 196（`readelf -s` + 读 .data 段即可）。
+
+---
+
+## 坑 12：进程表搬进 VA 窗口后，VMware 在 exec /bin/sh 后 TRAP 9 停机
+
+- **现象**（VMware Workstation 17，512 MB，`NPROC=256`，`-Define VM_PROCTEST_AUTOTEST,VM_FORCE_COM1`）：
+  ```
+  execve /bin/sh: entry 8048000 esp bfbfffc0 pd 3c3000 argc 3
+  *** kernel TRAP 9 (coprocessor overrun) err=0
+  eip=fe00268f cs=8 ... ss=1f ... cr2=bfbffe64
+  system halted.
+  ```
+  同一 ISO 在 QEMU 下能过，VMware 下必停；停在 `resume_user` 的
+  `mov 0x1c(%esi),%edx`（`eip=fe00268f`）。
+- **根因**：`resume_user` 先把 DS/ES/FS/GS 换成用户数据选择子（LDT，limit =
+  `btoc(UPT_MIN_ADDRESS)` → `0xFDC00000`），**之后**才从 `struct sysregs`
+  读 `edx/ebx/ecx/ebp`。S407 把 `procs[]` 搬到 `0xFE340000` 的窗口后，
+  `&p->uk_regs` 已在 `0xFDC00000` 之上；ring0 里 DS 仍受该 limit 约束，
+  VMware 严格执行 → 读 `uk_regs` 直接 #GP（4.4BSD 的向量表报成 TRAP 9）。
+  QEMU 对该 limit 的处理更宽松，所以只在 VMware 暴露。
+- **修复**（`kernel/arch/i386/usermode_asm.s`）：把 `edx/ebx/ecx/ebp` 全部
+  在切换 DS **之前**读完；用 `%di`（而不是 `%dx`）作选择子暂存，避免破坏
+  用户 edx；最后从栈上恢复 `edi/esi/eax`，再切 CR3 / iret。不要靠把 LDT
+  limit 改成 4 GB 绕过，先按“换段前读完”修，语义最干净。
+- **验证**：VMware 512 MB，`proctest` 输出
+  `phase A 200/200`、`phase B live=200/200`、`reaped 200/200`、`PASS`；
+  普通构建也能正常到 `bsd45>`。
+- **顺带修的构建坑**：刚链接出的 32 位 `genassym.exe` 立即执行时，Windows
+  偶尔返回 exit 0 但输出为空（杀软/文件锁窗口），导致 `assym.s` 0 字节。
+  `build_kernel.ps1` 已改为最多 4 次、间隔 300 ms 重试。
+- **同一任务里一并解决的内存探测坑**（S408）：VMware 给了 512 MB，内核却只
+  打印 `bios 640K+64512K`、`Memory: maxmem 4000000`（只认 64 MB）。原因是
+  `machdep.c` 只用 CMOS `0x17/0x18`（16 位 KB）探测扩展内存，超过 64 MB 会
+  饱和；VMware 的 CMOS `0x34/0x35` 返回 `0x01d0`，也不是内存大小。
+  修法：**stage1 / stage1_hdd 在实模式下跑 `INT 15h AX=E801`**（AX = 1MB~16MB
+  的 KB 数、BX = 16MB 以上的 64KB 块数），把 `MEM1` + 一个字写到 `0x9000`
+  （ISO 路径 stage2 源在 0x7E00、硬盘路径 stage2 在 0x8000，0x9000 两边都空），
+  内核从 `KERNBASE+0x9000` 读，E801 不可用时回落到 CMOS。
+  验证：`bios 640K+64512K e801 15360K. maxmem 1fedf000` → 511 MB；
+  proctest 新增 phase C（200×384KB=75MB 同时占用）PASS。
+

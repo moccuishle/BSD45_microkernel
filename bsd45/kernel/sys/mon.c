@@ -353,6 +353,19 @@ monitor(void)
 	start_userland("/bin/proctest");
 	/* start_userland enters user mode and does not return. */
 #endif
+#ifdef VM_SELFTEST_AUTOTEST
+	/* verification build only: the ordinary acceptance tools, run without a
+	 * keyboard.  VMware's serial port is output-only here, so the only way
+	 * to run a regression set in a guest is to script it from the kernel.
+	 * The script is handed to /bin/sh -c, so each tool's PASS/FAIL lines end
+	 * up in the serial log next to the usual boot output.
+	 * 仅验证构建：免键盘运行常规验收工具。VMware 的串口在这里只能输出，
+	 * 想在 guest 里跑回归只能由内核代跑；脚本交给 /bin/sh -c，各工具的
+	 * PASS/FAIL 行会和启动日志一起落进串口文件。 */
+	printf("AUTOTEST: running vfstest/shmtest/mmaptest\n");
+	start_userland("/bin/vfstest; /bin/shmtest; /bin/mmaptest; echo SELFTEST-DONE");
+	/* start_userland enters user mode and does not return. */
+#endif
 
 	for (;;) {
 		printf("bsd45> ");

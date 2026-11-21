@@ -5,12 +5,12 @@
  * LBA (recorded in the manifest by mkiso.ps1), copies the 32-bit stage 2
  * to 0x90000, enables A20 and protected mode, and jumps to stage 2.
  *
- * Stage 2 must sit above the kernel image and its .bss: it is still running
- * while the kernel is already laid out, so the image has to end below
- * 0x90000 (see kernel.ld).  The ELF-header snapshot stage 2 needs lives at
- * 0x300000, above 1 MB, so growing kernel tables cannot hit either one.
- * stage2 必须在内核镜像与其 .bss 之上（加载时它还在执行），所以镜像必须
- * 结束在 0x90000 以下；它用的 ELF 头快照在 1MB 以上的 0x300000。
+ * Stage 2 must sit above the staged image (the kernel file itself is read
+ * to 0x10000, so it has to end below 0x90000); the kernel is *copied* by
+ * stage 2 to physical 0x101000, and the ELF-header snapshot stage 2 needs
+ * lives at 0x600000, far above 1 MB.
+ * stage2 位于暂存镜像之上（内核文件读到 0x10000，所以必须结束在 0x90000 以下）；
+ * 内核由 stage2 搬到物理 0x101000，ELF 头快照在 1MB 以上的 0x600000。
  */
 
 	.code16
@@ -31,6 +31,43 @@ _start:
 	movb	%dl, boot_drive
 	movb	$0x31, %al
 	outb	%al, $0xE9
+
+	/*
+	 * Ask the BIOS how much RAM the machine has, while we are still in
+	 * real mode: INT 15h AX=E801 returns AX = KB between 1 MB and 16 MB,
+	 * BX = 64 KB blocks above 16 MB.  CMOS 0x17/0x18 cannot do this - they
+	 * saturate at 64 MB - so a VMware guest with 512 MB would keep looking
+	 * like a 64 MB machine and the kernel could never use the rest.
+	 * The answer is left at 0x9000 (magic 0x4D454D31 "MEM1", then one
+	 * 32-bit word holding AX in the low half and BX in the high half);
+	 * the kernel reads it from KERNBASE+0x9000 in isa/machdep.c.  0x9000
+	 * is free on both boot paths: the ISO one only uses 0x7E00.. for the
+	 * appended stage-2 image, and the disk one loads stage 2 at 0x8000 for
+	 * 4 KB - the kernel itself is staged at 0x10000 either way.
+	 * 仍处于实模式时用 INT 15h AX=E801 问 BIOS 要内存大小：AX = 1MB~16MB 的
+	 * KB 数，BX = 16MB 以上的 64KB 块数。CMOS 0x17/0x18 在 64MB 处饱和，做
+	 * 不到这件事，512MB 的 VMware guest 会一直被当成 64MB 机器。结果写在
+	 * 0x9000（魔数 0x4D454D31 "MEM1"，随后一个 32 位字：低半 AX、高半 BX），
+	 * 内核在 isa/machdep.c 里从 KERNBASE+0x9000 读取。0x9000 在两条引导路径
+	 * 上都空闲：ISO 路径只用 0x7E00 起放追加的 stage2 镜像，硬盘路径把 stage2
+	 * 装到 0x8000 共 4KB；两种情况下内核都暂存在 0x10000。
+	 */
+	movl	$0, 0x9000		/* no answer yet */
+	movw	$0xE801, %ax
+	xorw	%bx, %bx
+	int	$0x15
+	jc	1f
+	testw	%ax, %ax
+	jnz	2f
+	testw	%bx, %bx
+	jnz	2f
+	movw	%cx, %ax		/* some BIOSes answer in CX/DX */
+	movw	%dx, %bx
+2:
+	movw	%ax, 0x9004
+	movw	%bx, 0x9006
+	movl	$0x4D454D31, 0x9000
+1:
 
 	movw	$msg_hello, %si
 	call	puts

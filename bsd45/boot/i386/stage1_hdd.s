@@ -35,6 +35,34 @@ _start:
 	movb	$0x41, %al
 	outb	%al, $0xE9
 
+	/*
+	 * Same BIOS memory query as the ISO boot sector (stage1.s): CMOS tops
+	 * out at 64 MB, so an installed system on a bigger disk would only ever
+	 * see 64 MB of RAM.  INT 15h AX=E801 is still available here (real
+	 * mode), and the answer goes to 0x9000 - the 512 bytes above this boot
+	 * sector area this loader does not use (stage 2 goes to 0x8000 for 4 KB,
+	 * the kernel is staged at 0x10000).
+	 * 与 ISO 引导扇区相同的 BIOS 内存查询：CMOS 在 64MB 封顶，装在更大磁盘上
+	 * 的系统会永远只看到 64MB。此处仍是实模式，INT 15h AX=E801 可用，结果写到
+	 * 0x9000（本加载器不用的空档：stage2 在 0x8000 占 4KB，内核暂存在 0x10000）。
+	 */
+	movl	$0, 0x9000		/* no answer yet */
+	movw	$0xE801, %ax
+	xorw	%bx, %bx
+	int	$0x15
+	jc	1f
+	testw	%ax, %ax
+	jnz	2f
+	testw	%bx, %bx
+	jnz	2f
+	movw	%cx, %ax		/* some BIOSes answer in CX/DX */
+	movw	%dx, %bx
+2:
+	movw	%ax, 0x9004
+	movw	%bx, 0x9006
+	movl	$0x4D454D31, 0x9000
+1:
+
 	movw	$msg_hello, %si
 	call	puts
 

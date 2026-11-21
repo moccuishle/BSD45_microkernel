@@ -65,24 +65,22 @@ _resume_user:
 	pushl	44(%esi)		/* cs */
 	pushl	40(%esi)		/* eip */
 	/*
-	 * 中文：先用 dx 作为临时设置段选择子，**之后再**加载用户 edx。否则
-	 * "movw __udatasel,%dx" 会把刚恢复的用户 edx 低 16 位改写成段选择子，
-	 * 破坏依赖 edx 传递常量/参数的代码（如 GCC 内联 syscall 用
-	 * "mov %edx,%ebx" 传递 SRV_PORT=0，导致端口号变成段选择子 0x27）。
-	 * EN: Load user edx AFTER setting the segments.  Using dx as a scratch
-	 * register for __udatasel would otherwise clobber the restored user edx
-	 * (e.g. GCC's "mov %edx,%ebx" passing SRV_PORT=0), turning the port
-	 * number into the selector 0x27.
+	 * Read every field from struct sysregs BEFORE loading the user data
+	 * selector into DS.  The proc table now lives at 0xFE340000, above
+	 * the user data segment limit (btoc(UPT_MIN_ADDRESS) -> 0xFDC00000);
+	 * VMware enforces that limit in ring 0 too, so any DS-relative read
+	 * after "mov %dx,%ds" raises #GP (reported as TRAP 9).  Use %di as
+	 * the selector scratch so user edx survives for the final restore.
 	 */
-	movw	__udatasel, %dx
-	movw	%dx, %ds
-	movw	%dx, %es
-	movw	%dx, %fs
-	movw	%dx, %gs
-	movl	28(%esi), %edx		/* user edx, loaded after segment setup */
+	movl	28(%esi), %edx		/* user edx */
 	movl	24(%esi), %ebx
 	movl	32(%esi), %ecx
 	movl	16(%esi), %ebp
+	movw	__udatasel, %di
+	movw	%di, %ds
+	movw	%di, %es
+	movw	%di, %fs
+	movw	%di, %gs
 	movl	24(%esp), %edi		/* user edi */
 	movl	28(%esp), %esi		/* user esi */
 	testl	%eax, %eax		/* pd == 0 means same address space: keep CR3 */

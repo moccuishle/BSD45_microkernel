@@ -1,11 +1,12 @@
 /*
  * stage2.s - 32-bit protected mode ELF loader, linked at 0x90000.
  *
- * The loader itself sits above the kernel image and its .bss, and the
- * ELF-header snapshot it needs while copying segments lives at 0x300000
- * (above 1 MB), so growing kernel tables can never collide with either.
- * 加载器本身位于内核镜像与 .bss 之上，装载期间需要的 ELF 头快照放在
- * 1MB 以上的 0x300000，内核表再长也不会撞到这两者。
+ * The loader itself sits above the staged image, and the ELF-header snapshot
+ * it needs while copying segments lives at 0x600000 (well above 1 MB), so
+ * neither the kernel image - now linked at physical 0x101000 - nor its .bss
+ * can ever collide with the loader.
+ * 加载器本身位于暂存镜像之上；装载期间需要的 ELF 头快照放在 1MB 以上很远处
+ * （0x600000），内核镜像（物理 0x101000）与其 .bss 再长也撞不到。
  *
  * Parses the ELF32 image staged at 0x10000 by stage 1, copies every
  * PT_LOAD segment to its physical address (p_vaddr - KERNBASE), zeroes
@@ -65,23 +66,23 @@ _start32:
 	call	sputs
 
 	/* snapshot the ELF header: the copy in the staging area is overwritten
-	 * while segments are copied.  It lives at 0x300000, above 1 MB, where
-	 * neither the kernel image nor its .bss can ever reach it. */
+	 * while segments are copied.  It lives at 0x600000, far above 1 MB, so
+	 * neither the kernel image (phys 0x101000) nor its .bss can reach it. */
 	movl	$0x10000, %esi
-	movl	$0x300000, %edi
+	movl	$0x600000, %edi
 	movl	$1024, %ecx
 	cld
 	rep	movsl
 
 	movb	$0x61, %al
 	outb	%al, $0xE9
-	cmpl	$0x464C457F, 0x300000
+	cmpl	$0x464C457F, 0x600000
 	jne	bad
 
-	movl	0x30001C, %ebx		/* e_phoff */
-	addl	$0x300000, %ebx
-	movzwl	0x30002C, %ecx		/* e_phnum */
-	movl	0x300018, %ebp		/* e_entry */
+	movl	0x60001C, %ebx		/* e_phoff */
+	addl	$0x600000, %ebx
+	movzwl	0x60002C, %ecx		/* e_phnum */
+	movl	0x600018, %ebp		/* e_entry */
 	subl	$0xFE000000, %ebp	/* virtual -> physical */
 
 ph_loop:

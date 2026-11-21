@@ -127,8 +127,18 @@ if (!(Test-Path $ga)) { throw "genassym link failed" }
 # while PowerShell 5.1's ">" emits UTF-16LE which gcc rejects.
 # M1: 显式捕获输出并以 ASCII 写出（无 UTF-16 BOM）。Start-Process 的重定向在
 # 某些宿主下产出空文件，而 PowerShell 5.1 的 ">" 会写 UTF-16LE，gcc 不接受。
-$assymText = (& $ga 2>&1) -join "`n"
-if ($LASTEXITCODE -ne 0) { throw "genassym run failed (exit $LASTEXITCODE)" }
+# The freshly linked 32-bit helper can be locked/scanned briefly by Windows;
+# launching it immediately sometimes yields exit 0 with empty output.  Retry
+# with a short delay instead of silently writing a 0-byte assym.s.
+$assymText = ""
+$gaExit = 0
+for ($try = 1; $try -le 4; $try++) {
+    if ($try -gt 1) { Start-Sleep -Milliseconds 300 }
+    $assymText = (& $ga 2>&1) -join "`n"
+    $gaExit = $LASTEXITCODE
+    if ($assymText.Length -ge 100 -or $gaExit -ne 0) { break }
+}
+if ($gaExit -ne 0) { throw "genassym run failed (exit $gaExit)" }
 [System.IO.File]::WriteAllText("$bld\assym.s", $assymText, [System.Text.Encoding]::ASCII)
 if (!(Test-Path "$bld\assym.s")) { throw "genassym run failed" }
 if ((Get-Item "$bld\assym.s").Length -lt 100) { throw "genassym produced no output" }
@@ -318,7 +328,11 @@ if ($py -and (Test-Path $fixer)) {
 
 # ---------------------------------------------------------------- link
 $ldflags = @(
-    "-m", "i386pe", "--image-base", "0xFE000000", "-Ttext", "0xFE001000",
+    # The kernel now lives at KERNBASE + 1 MB (phys 0x101000) so .data/.bss
+    # may extend past 0xA0000 - see boot/i386/kernel.ld.  stage2 copies each
+    # PT_LOAD segment to p_vaddr - KERNBASE, so only the file still has to
+    # fit in the 576 KB staging area below 0x90000.
+    "-m", "i386pe", "--image-base", "0xFE000000", "-Ttext", "0xFE101000",
     "--subsystem", "console", "-e", "start", "--gc-sections",
     # the kernel is loaded at a fixed address by stage2; a PE base-reloc
     # table is useless here and binutils >= 2.4x refuses to emit one for
@@ -328,7 +342,7 @@ $ldflags = @(
 )
 
 # pass 1: discover section layout with a harmless _end
-& $LD @ldflags "--defsym", "_end=0xFE080000", "--defsym", "_edata=0xFE040000", "--defsym", "_etext=0xFE040000" -o "$bld\kernel.pe" @objs 2>&1 | Select-Object -First 40
+& $LD @ldflags "--defsym", "_end=0xFE180000", "--defsym", "_edata=0xFE140000", "--defsym", "_etext=0xFE140000" -o "$bld\kernel.pe" @objs 2>&1 | Select-Object -First 40
 if ($LASTEXITCODE -ne 0) { Write-Host "link pass1 failed" -ForegroundColor Red; exit 1 }
 
 $sect = & $OD -h "$bld\kernel.pe" 2>&1
@@ -346,7 +360,7 @@ foreach ($l in $sect) {
     }
 }
 $endAddr = [long](([math]::Floor(($maxEnd + 0xFFF) / 0x1000)) * 0x1000)
-if ($textEnd -eq 0) { $textEnd = [long]0xFE001000 }
+if ($textEnd -eq 0) { $textEnd = [long]0xFE101000 }
 if ($dataEnd -eq 0) { $dataEnd = $maxEnd }
 Write-Host ("sections end {0:x}, _end {1:x}, _edata {2:x}, _etext {3:x}" -f $maxEnd, $endAddr, $dataEnd, $textEnd)
 

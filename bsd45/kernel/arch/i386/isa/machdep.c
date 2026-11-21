@@ -898,7 +898,7 @@ int _udatasel, _ucodesel, _gsel_tss;
 init386(first) { extern ssdtosd(), lgdt(), lidt(), lldt(), etext; 
 	MTRACE('1');
 	int x, *pi;
-	unsigned biosbasemem, biosextmem;
+	unsigned biosbasemem, biosextmem, ext16;
 	struct gate_descriptor *gdp;
 	extern int sigcode,szsigcode;
 
@@ -973,14 +973,50 @@ init386(first) { extern ssdtosd(), lgdt(), lidt(), lldt(), etext;
 	 * the system is a little more stable, we'll come back to
 	 * this and deal with issues if incorrect BIOS information,
 	 * and when physical memory is > 16 megabytes.
+	 *
+	 * S408: the "> 16 megabytes" case is now handled.  CMOS 0x17/0x18
+	 * (like 0x30/0x31) saturate at 64 MB - 1 KB, so a VMware guest given
+	 * 512 MB reported 63.5 MB and page_alloc()'s dynamic ceiling could
+	 * never grow past it.  There is no CMOS register that describes a
+	 * bigger machine (VMware leaves 0x34/0x35 as 0x01D0, which is not a
+	 * memory size at all), so stage 1 asks the BIOS with INT 15h AX=E801
+	 * while it is still in real mode and leaves the answer at 0x9000:
+	 * magic "MEM1", then one word with AX (KB between 1 MB and 16 MB) in
+	 * the low half and BX (64 KB blocks above 16 MB) in the high half.
+	 * Reading low physical memory is safe here - locore has already
+	 * identity-mapped 0.._end at KERNBASE and this runs before
+	 * pmap_bootstrap().
+	 * 内存探测：0x17/0x18 在 64MB-1KB 处饱和，512MB 的 VMware guest 只报
+	 * 63.5MB，page_alloc 的动态上界再对也涨不上去。CMOS 里没有能描述更大机器
+	 * 的寄存器（VMware 的 0x34/0x35 是 0x01D0，根本不是内存大小），所以由
+	 * stage1 在实模式下用 INT 15h AX=E801 问 BIOS，把答案留在 0x9000：魔数
+	 * "MEM1"，随后一个字，低半为 AX（1MB~16MB 的 KB 数），高半为 BX（16MB
+	 * 以上的 64KB 块数）。此时 locore 已把 0.._end 恒等映射到 KERNBASE，且
+	 * 还没进 pmap_bootstrap，读低端物理内存是安全的。
 	 */
 	biosbasemem = rtcin(RTC_BASELO)+ (rtcin(RTC_BASEHI)<<8);
 	biosextmem = rtcin(RTC_EXTLO)+ (rtcin(RTC_EXTHI)<<8);
-	Maxmem = btoc ((biosextmem + 1024) * 1024);
-	maxmem = Maxmem - 1;
-	physmem = btoc (biosbasemem * 1024 + (biosextmem - 1) * 1024);
-	printf ("bios %dK+%dK. maxmem %x, physmem %x\n",
-		biosbasemem, biosextmem, ctob (maxmem), ctob (physmem));
+	ext16 = 0;
+	if (*(volatile unsigned *)(KERNBASE + 0x9000) == 0x4D454D31) {
+		unsigned mw = *(volatile unsigned *)(KERNBASE + 0x9004);
+
+		ext16 = mw & 0xffff;		/* AX: KB in 1 MB..16 MB */
+		/* total pages = (1024 + AX) KB / 4 KB + BX * 16 pages */
+		Maxmem = (1024 + ext16) / 4 + (mw >> 16) * 16;
+		if (Maxmem < 4096)		/* < 16 MB: bogus, use CMOS */
+			Maxmem = 0;
+	}
+	if (Maxmem != 0) {
+		maxmem = Maxmem - 1;
+		physmem = Maxmem - 1;		/* top page is BIOS-reserved */
+	} else {
+		Maxmem = btoc ((biosextmem + 1024) * 1024);
+		maxmem = Maxmem - 1;
+		physmem = btoc (biosbasemem * 1024 + (biosextmem - 1) * 1024);
+	}
+	printf ("bios %dK+%dK e801 %dK. maxmem %x, physmem %x\n",
+		biosbasemem, biosextmem, ext16, ctob (maxmem),
+		ctob (physmem));
 
 	MTRACE('4');
 	vm_set_page_size();

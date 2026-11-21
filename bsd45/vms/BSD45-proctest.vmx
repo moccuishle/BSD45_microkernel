@@ -26,7 +26,11 @@ bios.hddOrder = ""
 
 # No serial0 device on purpose: a file-backed port captures nothing from this
 # guest and a network-backed one blocks the vCPU when nobody is connected.
-# Use `vmrun snapshot` + tools/vm_screen.py --klog instead (os_vmware_debug.md).
+# Serial file for automated proctest capture (VM_FORCE_COM1 build).
+serial0.present = "TRUE"
+serial0.fileType = "file"
+serial0.fileName = "bsd45-proctest-serial.log"
+
 extendedConfigFile = "BSD45-proctest.vmxf"
 virtualHW.productCompatibility = "hosted"
 ide0:0.present = "FALSE"
@@ -36,13 +40,13 @@ sound.present = "FALSE"
 vmxstats.filename = "BSD45-ELF-x86.scoreboard"
 numa.autosize.cookie = "10001"
 numa.autosize.vcpu.maxPerVirtualNode = "1"
-uuid.bios = "56 4d 2a 8f d9 21 cf aa-96 b7 65 55 62 3a ed e2"
-uuid.location = "56 4d 2a 8f d9 21 cf aa-96 b7 65 55 62 3a ed e2"
+uuid.bios = "56 4d 37 17 d1 42 19 b7-29 70 6e ad 39 68 61 a1"
+uuid.location = "56 4d 37 17 d1 42 19 b7-29 70 6e ad 39 68 61 a1"
 svga.vramSize = "134217728"
 vmotion.checkpointFBSize = "134217728"
 vmotion.checkpointSVGAPrimarySize = "134217728"
 monitor.phys_bits_used = "42"
-cleanShutdown = "TRUE"
+cleanShutdown = "FALSE"
 softPowerOff = "FALSE"
 
 # gdb remote stub for kernel debugging (see os_vmware_debug.md)

@@ -327,6 +327,7 @@ main(vm_offset_t firstaddr)
 	extern int IdlePTD;
 	extern int Maxmem, physmem;
 	extern void page_alloc_set_floor(unsigned);
+	extern void page_ref_init(void);
 
 	/*
 	 * The bump allocator must start *after* this image.  locore passes the
@@ -337,6 +338,17 @@ main(vm_offset_t firstaddr)
 	 * 内核长大后不会把自己的页当空闲页发出去。
 	 */
 	page_alloc_set_floor((unsigned)firstaddr);
+
+	/*
+	 * COW refcount table, sized from the BIOS-reported physmem.  Must run
+	 * after the bump-allocator floor is set (it takes pages itself) and
+	 * before any user page can be shared, so that no fork can ever see an
+	 * unaccounted page.
+	 * COW 引用计数表按 BIOS 探测到的 physmem 定容。必须在 bump 起点设定之后
+	 * （它自己要取页）、任何用户页被共享之前调用，保证 fork 永远看不到未计
+	 * 数的页。
+	 */
+	page_ref_init();
 
 	/*
 	 * Layout guard: the scratch mapping pages (0xFE200000..0xFE202FFF,

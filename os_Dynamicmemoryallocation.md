@@ -167,7 +167,7 @@ VMware 串口无法可靠从主机读命令（命名管道实测阻塞/不通，
 **功能验证（权威输出，用 QEMU `-serial file:` 抓取；VMware 见下方说明）**：
 ```
 debugcon(0xE9): 1234a5                    # stage1/stage2 全检查点通过，内核成功引导
-Memory: physmem 40a0000 (512MB)           # 动态内存上界生效（不再写死 61MB）
+Memory: physmem 40a0000                   # 0x40a0000 = 64.6MB, NOT 512MB (see 9.3)
 kthread: 24 thread slots at fea00000
 kthread: spawn softirq/aio tid 1073741824+ # tid 高位分区，不与 pid 冲突
 AUTOTEST: launching /bin/proctest via init script
@@ -179,11 +179,15 @@ proctest: PASS
 - 同时存活进程数从旧的 8 提升到 **20**（受 NPROC=24 约束，1 槽给 init shell）；phase B 用 512MB 内存时实测到第 22 个子进程才因 NPROC 槽位耗尽返回 `-EAGAIN`，**不是内存耗尽**——说明 expansion 生效，内存上界改造也生效（physmem 读到 512MB）。
 - 引导器地址冲突坑已定位并解决：见 §4.1（NPROC 从 256→96→40→24 逐步收敛到 stage2 可行域）。
 
-**VMware 验证说明**：VMware 虚拟机 `bsd45/vms/BSD45-proctest.vmx`（基于项目模板，memsize=512，串口→文件）能正常引导 BSD45 ISO，并在 proctest 跑完后自动 halt（与 QEMU 中 PASS 后 halt 行为一致，证明测试在 VMware 中同样执行完毕）；但 VMware 文件型虚拟 UART 未把内核 COM1 字符写入串口文件（0 字节），尽管内核已 `VM_FORCE_COM1` 强制输出——这是 VMware 虚拟 UART 与本内核轮询式 COM1 驱动的兼容问题，非内核功能缺陷。功能正确性以可完整抓取串口的 QEMU 输出为准，VMware 用于验证"能引导到自动测试并结束"。
+**VMware 验证说明**：VMware 虚拟机 `bsd45/vms/BSD45-proctest.vmx`（基于项目模板，memsize=512，串口→文件）能正常引导 BSD45 ISO，并在 proctest 跑完后自动 halt（与 QEMU 中 PASS 后 halt 行为一致，证明测试在 VMware 中同样执行完毕）。
+
+> **S408 更正**：上面这段原来说"VMware 文件型虚拟 UART 未把内核 COM1 字符写入串口文件（0 字节）"。实测并非如此——只要 `.vmx` 里配 `serial0.present/fileType=file` 并且内核用 `-D VM_FORCE_COM1` 构建，VMware 的串口文件能完整接住内核与 stage1/stage2 的全部输出（本文件 §9.7 的输出就是这么抓的）。"0 字节"是早期 `.vmx` 根本没接 `serial0` 造成的。
 
 **回归**：正常构建（无 AUTOTEST 宏）下 `vfstest`/`shmtest`/`nettest` 保持 PASS；KLT 1:1 模型、`/dev/ps`、调度、`thread_*` 语义未改（所有循环/下标逻辑原样保留）。
 
-**边界（如实记录）**：受 32 位 stage1/stage2 引导布局限制，进程表只能扩到 24（旧 8 的 3 倍）；真正的"无限进程"需要 Level C（swap + 64 位），当前架构做不到。动态内存上界（§2.3）已落地，VMware 加大内存确实被内核读到（physmem 40a0000）。
+**边界（如实记录）**：受 32 位 stage1/stage2 引导布局限制，进程表当时只能扩到 24（旧 8 的 3 倍）；真正的"无限进程"需要 Level C（swap + 64 位），当前架构做不到。
+
+> **S408 更新**：§8/§9 之后这个 24 的边界已经不存在（表搬进 VA 窗口、内核搬到 1MB 以上），进程表 256 槽；而"VMware 加大内存被内核读到"在 S408 之前**并不成立**——`physmem 40a0000` 只有 64.6MB，CMOS 在 64MB 饱和。真正的 512MB 探测在 §9.3。
 
 ---
 
@@ -321,7 +325,7 @@ staged: 00 00 00 ...   elf: 0d 40 00 ...
 - KLT 1:1 模型、调度器遍历方式、`struct proc`/`struct kthread` 布局**完全未改**。
 - 内核 `.bss` 反而变小：`sections end` 从 `0x8E014` 变成 `0x83014`。
 
-### 8.4 当前状态（如实记录，未完成）
+### 8.4 当前状态（S407 结束时，已由 §9 关闭）
 
 已完成并验证（QEMU `-m 512`）：
 
@@ -347,3 +351,154 @@ BSD/386 monitor - type 'help' for commands
 表现为 `pmap_enter` 里 TRAP 12。要搬必须先改这两处，并同步搬
 `SCRATCH_PD/PT/PAGE`）。窗口方案已经把"几百个进程"的目标解决了，
 搬 1MB 只剩"给内核再留 3MB 余量"的意义，优先级可降。
+
+> **以上两项在 S408 已全部关闭，见 §9。**
+
+---
+
+## 9. S408：关闭 §8.4 的两项未完成，并把"内存决定上限"真正打通（2026-11-22）
+
+### 9.1 `argc=0` 回归：两个独立原因，均已修复并验证
+
+**(1) 进程表被 CD 映像窗口覆盖。** `procs[]` 当时放在 `0xFE400000`，而
+`CD_IMAGE_VA` 也是 `0xFE400000`——`cd_map()` 每次 `execve` 都会重映射这段
+（最多 4 MB），直接把进程表踩掉，`execve` 随后读到 `argc 0`。表搬到
+`0xFE340000`（zcomp 池之后、CD 窗口之前）后消失。
+
+**(2) `resume_user` 在装载用户数据段选择子之后仍用 `%ds` 读内核数据。**
+这是 VMware 独有的 TRAP 9：`struct sysregs` 在进程表里（`0xFE34xxxx`），
+高于用户数据段限长 `btoc(UPT_MIN_ADDRESS)` → `0xFDC00000`。VMware 在 ring 0
+也校验段限长（QEMU 不校验），所以 `movw __udatasel,%ds` 之后的
+`movl 28(%esi), %edx` 立刻 #GP。修法：**先把所有字段读进寄存器，最后再装
+段选择子**，并用 `%di` 当选择子的临时寄存器（早先版本用 `%dx`，会把用户的
+`edx` 低 16 位改成选择子 `0x27`，破坏 `SRV_PORT=0` 这类传参）。
+见 `kernel/arch/i386/usermode_asm.s`。
+
+VMware 实测（512 MB guest，`vms/BSD45-proctest.vmx`，串口→文件）：
+
+```
+execve /bin/sh: entry 8048000 esp bfbfffc0 pd 3c3000 argc 3   <- 正常
+execve /bin/proctest: entry 8048000 esp bfbfffcc pd 3fe000 argc 1
+proctest: phase A sequential fork/wait = 200 (target 200)
+proctest: phase B simultaneous live children = 200 (target 200)
+proctest: reaped 200/200 children
+proctest: PASS
+```
+
+### 9.2 内核搬到 1MB 以上（`0xFE101000`）
+
+`boot/i386/kernel.ld` 的链接基址 `0xFE001000 → 0xFE101000`（物理
+`0x101000`），stage2 的 ELF 头快照 `0x300000 → 0x600000`。§8.4 记录的两个
+阻碍（`pmap_bootstrap()` 的 `firstaddr` 与 `virtual_avail` 公式）在 S407
+已经改成"只向上收"，因此这次只是链接地址 + 快照地址的改动：
+
+- `firstaddr` 现在由 locore 的 `lea 7*NBPG(%esi)`（`_end` 页对齐 + 7 页）
+  给出，`page_alloc_set_floor()` 只抬不降，`main()` 里还有"镜像不得压到
+  0xFE200000 scratch 窗口"的 panic 护栏。
+- 只有 ELF **文件**仍要落在 0x10000..0x90000 的 576 KB 暂存区；`.data/.bss`
+  由 stage2 搬到 1 MB 以上，不再受 640 KB 限制。这正是下面 9.3/9.4 的前提。
+
+### 9.3 内存探测：CMOS 在 64MB 饱和，改由 stage1 走 BIOS E801
+
+§5.2 里"physmem 40a0000（512MB），动态内存上界生效"是个**误读**：
+`0x40a0000 = 64.6 MB`，内核那时仍然只认 64MB，`page_alloc()` 的动态上界
+`physmem<<12` 因此永远停在 63MB 附近。根因是 4.4BSD 的经典注释
+（"when physical memory is > 16 megabytes" 一直没实现）：CMOS `0x17/0x18`
+（以及 `0x30/0x31`）在 64MB−1KB 处饱和。VMware 的 `0x34/0x35` 返回
+`0x01D0`，根本不是内存大小，不能用来推断。
+
+修法：stage1 还在实模式时调 `INT 15h AX=E801`（AX = 1MB~16MB 的 KB 数，
+BX = 16MB 以上的 64KB 块数），把答案写在 `0x9000`（魔数 `MEM1` + 一个字，
+低半 AX、高半 BX），内核在 `isa/machdep.c` 里从 `KERNBASE+0x9000` 读
+（此时 locore 已把 `0.._end` 恒等映射，且还没进 `pmap_bootstrap`）。
+`0x9000` 是两条引导路径都空闲的空档：ISO 路径只用 `0x7E00` 起放追加的 stage2
+镜像，硬盘路径把 stage2 装到 `0x8000` 共 4 KB。`stage1_hdd.s` 也加了同一段
+E801，否则装到磁盘上的系统会退回 64MB。
+E801 不可用时回落到原来的 CMOS 路径，行为与旧版一致。
+
+```
+bios 640K+64512K e801 15360K. maxmem 1fedf000, physmem 1fedf000
+Memory: maxmem 1fee0000, physmem 1fedf000, avail 100000-1fede000   # 511 MB
+```
+
+### 9.4 COW 引用计数表按内存定容（`PAGE_REF_VA = 0xFE900000`）
+
+旧表是 `.bss` 里的 `page_ref[1<<14]`，只覆盖前 64MB：页号超界时
+`page_index()` 返回 0、`page_ref_inc()` 变空操作，`page_put()` 于是会把
+**另一个进程还在映射的页**放回空闲链表。512MB guest 一旦分配越过 64MB 就
+是静默内存踩踏。现在 `page_ref_init()`（`main()` 在 `page_alloc_set_floor()`
+之后立刻调用）按 `physmem` 定容，`kern_table_alloc()` 映射到 `0xFE900000`
+的 1MB 窗口（LAPIC 0xFE800000、BUF 0xFE800000+256KB 之后，KSTACK
+0xFEA00000 之前）：每页 1 字节，512MB guest 用 128KB，4GB guest 用满 1MB。
+建表期间 `page_ref == 0`，那批页不计引用（都是永不共享的内核表）。
+
+### 9.5 内核栈泄漏（每次 spawn 8KB）
+
+`kstack_alloc()` 过去每次 `kthread_spawn()`/`kthread_user_spawn()` 都
+`vfs_page_alloc()` 两个页、映射到 `KSTACK_VA + i*8KB`，而**没有任何释放
+路径**（`§4.4` 记的那条 TODO）。一个 fork/exit 周期泄漏 8KB，200 次顺序
+fork 就是 1.6MB，只有空闲页计数能看出来。
+
+现在每个槽位的 8KB 窗口只映射一次（`kstack_mapped[NKTHREAD]` 位图），
+复用时 `bzero` 掉上一个线程的栈帧即可。内核栈内存因此固定上界
+`256×8KB = 2MB`，抖动期零分配。**故意不做**延迟回收：用户线程是在自己的
+内核栈上释放自己 TCB 的（`kthread_exit()` / `thread_exit_current()`），
+在那里归页等于释放正在使用的内存；延迟回收最多只能拿回 2MB，不值得冒
+use-after-free 的风险。
+
+`proc_sched()`/`proc_exit()` 空闲时新增一行账目，专门用来盯这个：
+
+```
+[user exit 0]
+mem: 932 pages in use, 23368 allocated, next free a0f000
+```
+
+修复前同一条路径是 `1300 pages in use, 3337 allocated`，修复后
+`904/2940`，差值约 400 页 = 200 个 phase B 子进程的内核栈——正好对上。
+
+### 9.6 新增验证入口与 proctest 的 phase C
+
+- `-D VM_SELFTEST_AUTOTEST`（`kernel/sys/mon.c`）：免键盘跑
+  `/bin/vfstest; /bin/shmtest; /bin/mmaptest`，输出进串口文件。VMware 的
+  串口在这里只能输出，想在 guest 里跑回归只能由内核代跑。
+- `proctest` 新增 **phase C**：200 个子进程各自 `mmap` 384KB 匿名内存并
+  逐页写入，同一时刻占住 **75MB**——越过旧 CMOS 的 64MB 与旧 bump 上界的
+  63MB。内核若仍以为只有 64MB，会直接在 `page_alloc()` 里 panic。
+
+### 9.7 S408 实测（VMware，512MB，串口→文件）
+
+```
+bios 640K+64512K e801 15360K. maxmem 1fedf000, physmem 1fedf000
+usermode: COW refcount 130783 pages (128 KB) at fe900000
+kthread: 256 thread slots at fea00000
+usermode: 256 proc slots at fe340000 (452 KB)
+proctest: phase A sequential fork/wait = 200 (target 200)
+proctest: phase B simultaneous live children = 200 (target 200)
+proctest: reaped 200/200 children
+proctest: phase C 200 children x 384 KB = 75 MB held at once
+proctest: PASS
+mem: 932 pages in use, 23368 allocated, next free a0f000
+```
+
+回归（`VM_SELFTEST_AUTOTEST`）：
+
+| 工具 | 结果 | 说明 |
+|---|---|---|
+| shmtest | PASS | |
+| mmaptest | file/anon/shared 全 ok | |
+| vfstest | **FAIL**：`close forward (server slot leak)` | **既有缺陷**，S405 的 close 转发；用 HEAD 内核（未含本次改动）复跑同样 FAIL |
+| schedtest | `/bin/schedtest: not found` | **既有缺陷**，ISO 名字查找（文件在 ISO 里存在，`SCHEDTEST.ELF`）；HEAD 内核复跑同样 not found |
+
+`vfstest` 与 `schedtest` 这两条都与本节的改动无关，用 `git stash` 的 HEAD
+内核在同一台 VMware guest 里复现过同样结果，因此作为**既有缺陷**单独记录，
+不在本次范围内。
+
+### 9.8 相关文件
+
+- `boot/i386/kernel.ld`、`stage1.s`（E801）、`stage2.s`（快照 0x600000）
+- `kernel/arch/i386/isa/machdep.c`（E801 读取 + CMOS 回落）
+- `kernel/arch/i386/usermode_asm.s`（段限长/edx 修复）
+- `kernel/sys/usermode.c`（`page_ref_init()`、`mem_report()`、`PAGE_REF_VA`）
+- `kernel/thread/kthread.c`（`kstack_mapped[]` 栈复用）
+- `kernel/sys/mon.c`（`VM_SELFTEST_AUTOTEST`）
+- `libexec/proctest.c`（phase C）
