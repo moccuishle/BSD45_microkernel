@@ -1,4 +1,4 @@
-# build_iso.ps1 - build the El Torito boot image and the BSD45-ELF-x86 ISO
+﻿# build_iso.ps1 - build the El Torito boot image and the BSD45-ELF-x86 ISO
 param(
     [string]$Kernel = "",
     [string]$OutIso = "",
@@ -213,7 +213,17 @@ $isoBytes = [IO.File]::ReadAllBytes($OutIso)
 $target = [long]$KernelLba * 2048
 if ($isoBytes.Length -gt $target) { throw "ISO already larger than kernel LBA ($($isoBytes.Length) > $target)" }
 $kbytes = [IO.File]::ReadAllBytes($Kernel)
-$fs = [IO.File]::Open($OutIso, [IO.FileMode]::Append)
+$fs = $null
+try {
+    $fs = [IO.File]::Open($OutIso, [IO.FileMode]::Append)
+} catch {
+    # VMware keeps the ISO open while a VM (or a powered-off tab) has it
+    # mounted, so the kernel can never be appended.  Without this check the
+    # build "succeeds" and the guest stops at "S2: bad ELF magic".
+    # VMware 在虚拟机（或已关机的标签页）仍挂着 ISO 时会占住文件，内核根本
+    # 追加不进去；没有这个检查的话构建看似成功，guest 停在 bad ELF magic。
+    throw 'cannot append the kernel to the ISO: it is still open in VMware - close the BSD45 tab and rebuild'
+}
 $pad = New-Object byte[] ($target - $isoBytes.Length)
 $fs.Write($pad, 0, $pad.Length)
 $fs.Write($kbytes, 0, $kbytes.Length)
@@ -224,7 +234,13 @@ if ($pad2 -gt 0) {
 }
 $fs.Close()
 
-Write-Host ("ISO: {0} ({1:N0} bytes), kernel at LBA {2}" -f $OutIso, (Get-Item $OutIso).Length, $KernelLba)
+# The kernel must really be in the image: stage 1 reads it from this LBA.
+$final = (Get-Item $OutIso).Length
+if ($final -lt ($target + $kbytes.Length)) {
+    throw ('kernel injection failed: ' + $final + ' < ' + ($target + $kbytes.Length))
+}
+
+Write-Host ("ISO: {0} ({1:N0} bytes), kernel at LBA {2}" -f $OutIso, $final, $KernelLba)
 
 
 

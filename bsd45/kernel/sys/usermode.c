@@ -153,6 +153,16 @@ static struct file ramfs[] = {
 #define	FD_VMSTAT	10	/* /dev/vmstat: S17 cache counters */
 
 /*
+ * S409: /dev/ps snapshot.  File scope (not function-static) so the read path
+ * can re-render it at the start of every open; see the FD_PS branch.  8 KB
+ * holds a full 256-slot table (~22 bytes per line).
+ * /dev/ps 快照：放在文件作用域，读取路径才能在每次 open 时重新渲染；8KB 足够
+ * 写满 256 个槽（每行约 22 字节）。
+ */
+static char	ps_snap_buf[8192];
+static int	ps_snap_len;
+
+/*
  * S17: mmap(2).  This port has no demand paging (a page fault stops the
  * machine), so mappings are populated eagerly:
  *	MAP_ANON            - fresh zeroed pages
@@ -4587,30 +4597,60 @@ bsd45_syscall(struct sysregs *r)
 			break;
 		}
 		if (cur->uk_fds[fd].type == FD_PS) {
-			static char pbuf[512];
-			static int plen = -1;
+			/*
+			 * S409: this used to be `static int plen = -1` - rendered on
+			 * the very first read after boot and then cached for the
+			 * lifetime of the kernel, so `ps` kept printing whatever the
+			 * first snapshot contained (typically sh + ps, i.e. two
+			 * lines) no matter how many processes existed later.  The
+			 * snapshot is now taken at the start of each open (offset 0)
+			 * and cached only for the rest of that fd's reads, so the
+			 * table cannot shift under a partially consumed read.
+			 * 旧代码用 `static int plen = -1` 只渲染一次就永久缓存，之后 `ps`
+			 * 永远打印开机后第一次的快照（通常只有 sh 和 ps 两行）。现在每次
+			 * 从 offset 0 开始读（即每次 open）重新快照，同一次读取序列内仍复
+			 * 用快照，避免进程表在分片读取途中变化导致输出错位。
+			 *
+			 * 8 KB, not 512: one line is ~22 bytes and NPROC is 256, so a
+			 * full table is ~5.6 KB and the old buffer truncated `ps` to
+			 * roughly twenty rows without saying so.
+			 * 缓冲从 512 字节扩到 8KB：单行约 22 字节，256 个槽全满约 5.6KB，
+			 * 旧缓冲会把 `ps` 静默截断到二十行左右。
+			 *
+			 * 该缓冲是文件作用域静态量（ps_snap_buf）：两个进程同时读
+			 * /dev/ps 会共用它，单控制台环境下可接受，注释在此说明。
+			 */
 			unsigned off = cur->uk_fds[fd].off, n2;
 
-			if (plen < 0)
-				plen = proc_list_text(pbuf, sizeof(pbuf));
-			if (off >= (unsigned)plen) {
+			if (off == 0)
+				ps_snap_len = proc_list_text(ps_snap_buf,
+				    sizeof(ps_snap_buf));
+			if (off >= (unsigned)ps_snap_len) {
 				r->eax = 0;
 				break;
 			}
-			n2 = plen - off;
+			n2 = ps_snap_len - off;
 			if (n2 > len)
 				n2 = len;
-			bcopy(pbuf + off, (char *)buf, n2);
+			bcopy(ps_snap_buf + off, (char *)buf, n2);
 			cur->uk_fds[fd].off = off + n2;
 			r->eax = n2;
 			break;
 		}
 		if (cur->uk_fds[fd].type == FD_MOUNTS) {
 			static char mbuf[256];
-			static int mlen = -1;
+			static int mlen;
 			unsigned off = cur->uk_fds[fd].off, n2;
 
-			if (mlen < 0)
+			/*
+			 * Same S409 fix as /dev/ps: the old `static int mlen = -1`
+			 * cached the first mount table for the whole boot, so `df`
+			 * after a mount(8) still showed the old list.  Re-render at
+			 * the start of each read sequence.
+			 * 与 /dev/ps 同样的 S409 修复：旧代码 `static int mlen = -1`
+			 * 把首次挂载表缓存到关机，mount(8) 之后 df 仍显示旧列表。
+			 */
+			if (off == 0)
 				mlen = vfs_mount_list(mbuf, sizeof(mbuf));
 			if (off >= (unsigned)mlen) {
 				r->eax = 0;
