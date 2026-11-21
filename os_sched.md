@@ -8,9 +8,9 @@
 | 项 | 值 | 位置 |
 |---|---|---|
 | TCB 总数 | `NKTHREAD = 16` | `kthread.h:21` |
-| 进程数上限 | `NPROC = 8`（`procs[8]`） | `usermode.c:158` |
-| TCB 状态 | `KT_FREE / KT_RUN / KT_BLOCK / KT_ZOMBIE` | `kthread.h:22-25` |
-| 内核栈 | 每个 TCB 8 KB，VA 起点 `0xFEA00000` | `kthread.h:48-49` |
+| 进程数上限 | `NPROC = 1024`（S410，进程表在 `0xFED00000`） | `usermode.c` |
+| TCB 数 | `NKTHREAD = 1024`（TCB 池在 `0xFEF00000`） | `kthread.h` |
+| 内核栈 | 每个 TCB 8 KB，VA 起点 `0xFF000000`（8MB，S410） | `kthread.h` |
 | CPU 数 | 1（`t_lastcpu` 已预留亲和性字段，SMP 未启用） | `kthread.c:343` |
 
 调度单位是 **TCB（`struct kthread`）而不是进程**；TCB 通过 `t_proc` 反指所属进程，同一进程的多个线程共享页目录（切换线程时若 `p->uk_pd == cur_pd` 就不重载 CR3）。

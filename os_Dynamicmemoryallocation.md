@@ -423,13 +423,18 @@ Memory: maxmem 1fee0000, physmem 1fedf000, avail 100000-1fede000   # 511 MB
 
 ### 9.4 COW 引用计数表按内存定容（`PAGE_REF_VA = 0xFE900000`）
 
+> **S410 已迁移**：这个地址与页缓存的 `PCACHE_VA` 撞车，而且单字节计数在
+> 255 饱和——1000 个进程共享一页时 `page_put()` 会提前释放。现表在
+> `0xFEC00000`、16 位计数、覆盖 2GB，见 §10.2。
+
 旧表是 `.bss` 里的 `page_ref[1<<14]`，只覆盖前 64MB：页号超界时
 `page_index()` 返回 0、`page_ref_inc()` 变空操作，`page_put()` 于是会把
 **另一个进程还在映射的页**放回空闲链表。512MB guest 一旦分配越过 64MB 就
 是静默内存踩踏。现在 `page_ref_init()`（`main()` 在 `page_alloc_set_floor()`
 之后立刻调用）按 `physmem` 定容，`kern_table_alloc()` 映射到 `0xFE900000`
 的 1MB 窗口（LAPIC 0xFE800000、BUF 0xFE800000+256KB 之后，KSTACK
-0xFEA00000 之前）：每页 1 字节，512MB guest 用 128KB，4GB guest 用满 1MB。
+0xFEA00000 之前）：每页 1 字节，512MB guest 用 128KB，4GB guest 用满 1MB（S410 起改为每页
+2 字节、1MB 窗口覆盖 2GB）。
 建表期间 `page_ref == 0`，那批页不计引用（都是永不共享的内核表）。
 
 ### 9.5 内核栈泄漏（每次 spawn 8KB）
@@ -502,3 +507,155 @@ mem: 932 pages in use, 23368 allocated, next free a0f000
 - `kernel/thread/kthread.c`（`kstack_mapped[]` 栈复用）
 - `kernel/sys/mon.c`（`VM_SELFTEST_AUTOTEST`）
 - `libexec/proctest.c`（phase C）
+
+## 10. S410：进程表 1024 槽，1000 个进程同时存活（2026-11-22）
+
+§8/§9 之后"无限进程"的实际天花板是**槽位表**：`NPROC = NKTHREAD = 256`。
+512MB guest 下 proctest 峰值只用了约 90MB，先撞到的是 `fork` 返回 `-EAGAIN`。
+本节把它抬到 1024 槽并实测 1000 个进程同时存活。过程中挖出四个真缺陷，其中
+两个会直接毁掉机器。
+
+### 10.1 容量与 VA 布局
+
+`1024 x sizeof(struct proc) = 1024 x 1808 = 1.77MB`，已塞不进
+`0xFE340000..0xFE3FFFFF` 那 768KB 空档，所以整组内核窗口上移，放到 locore
+12MB 恒等映射窗口之上、没有任何既有窗口占用的地方：
+
+| 地址 | 大小 | 用途 |
+|---|---|---|
+| `0xFEC00000` | 1MB | COW 引用计数表（16 位，覆盖 2GB） |
+| `0xFED00000` | 1.77MB | 进程表 1024 槽 |
+| `0xFEF00000` | 1MB | TCB 池 1024 槽 |
+| `0xFF000000` | 8MB | 内核栈 1024 x 8KB（`0xFF000000..0xFF800000`） |
+
+最高一页起始 `0xFF7FF000` 正好等于 `VM_MAX_KERNEL_ADDRESS`，不需要改动
+vmparam。原来的 `0xFE340000`（进程表）、`0xFE3C0000`（TCB）、`0xFEA00000`
+（2MB 栈区）全部空出。
+
+用户页目录只拷贝内核 PDE 一次（`user_pd_create`），因此拷贝范围从
+`0x3f6..0x3fa` 扩到 `0x3f6..0x3fd`——上面四组窗口跨 `0x3fb/0x3fc/0x3fd`。
+
+### 10.2 COW 引用计数：从字节改 16 位，并换掉撞车的窗口
+
+两个独立缺陷：
+
+- **单字节在 255 饱和**。`page_ref_inc()` 原写 `if (n < 255) n++`。1000 个子
+  进程共享父进程的页时计数停在 255，等其中 745 个退出后 `page_put()` 看到 1，
+  就把剩下 254 个仍在映射的页释放了——静默内存踩踏，且只在进程数超过 255 时
+  出现。
+- **与页缓存同址**。`PAGE_REF_VA` 是 `0xFE900000`，而 `kernel/vm/pagecache.c`
+  的 `PCACHE_VA` 也是 `0xFE900000`（128 个 4KB 页）。经 tmpfs/ffs/jlfs 读文件
+  会把缓存页直接映射到引用计数表上，`page_ref_get()` 读回的就是文件内容。
+
+现表：`unsigned short`、`0xFEC00000`、1MB 窗口 → 524288 页 = 2GB。512MB
+guest 占 256KB。超过 2GB 的 guest 需要 2MB 窗口，而 `0xFEC00000` 以上已无空间
+（见 §10.1 的布局），这一点写在 `PAGE_REF_MAX` 的注释里。
+
+### 10.3 `pmap_enter()` 不会按需建页表
+
+第一次把窗口搬到 `0xFEC00000` 时，内核在 `page_ref_init()` 里就死了：
+
+```
+*** kernel TRAP 12 (stack fault) err=0
+eip=fe112f8a ... cr2=0
+```
+
+`pmap_enter()` 对缺失的 PDE 不分配页表，`pmap_pte()` 返回 0，紧接着
+`pmap_pte_pa(pte)` 解引用 0 → 地址 0 上的访存失败。locore 只建了
+`0x3f8..0x3fa` 三个 PDE（12MB），所以 12MB 以上的内核窗口一个都进不去。
+
+两处改动：
+
+- `kern_window_install()`（`usermode.c`）：为 4MB 窗口分配并清零一张页表，
+  写 `pmap->pm_pdir[pdi] = pa | PG_V | PG_RW`（supervisor，不带 `PG_u`）。
+  `kern_table_alloc()` 在每一页映射前检查是否落在 4MB 边界，落在边界就先装
+  页表，因此进程表/TCB 池/引用计数表都不再需要各自处理。
+- `pmap_enter()` 里 `pte == 0` 直接 `panic("pmap_enter: no page table for va
+  %x ...")`。原来的表现是 `TRAP 12 + cr2=0`，完全看不出原因，定位花了很久。
+
+### 10.4 内核栈池 8MB 与"用户页目录只拷一次 PDE"
+
+`NKTHREAD` 从 256 到 1024，`KSTACK_VA` 从 `0xFEA00000` 移到 `0xFF000000`，
+共 8MB、跨 `0x3fc/0x3fd` 两个 PDE。栈是**按需映射**的（`kstack_mapped[]`
+缓存，槽位首次使用时才取页），所以第 512 个槽对应的 PDE 要等到第 513 个线程
+才出现——而用户页目录在开机时就拷走了内核 PDE，那些进程一用到高槽位线程就会
+缺页。
+
+`kthread_prime_stacks()`（`main()` 里紧跟 `proc_table_init()`）为栈池的每个
+4MB 窗口调用一次 `kern_table_alloc(va, PAGE_SIZE)`：页表建好、页也被映射并
+清零。每窗口故意泄漏 4KB（该槽位首次使用时用新页重映射同一 VA），共 8KB。
+
+### 10.5 zcomp 回收：水位太低 + 在缺页路径里压缩，导致自锁
+
+1000 个子进程跑到第 417 个时机器卡死（VMware 直接黑屏，QEMU 里能抓寄存器）：
+`EIP` 在 `tlbflush`，`CR2` 固定 `0xbfbfdd69`（proctest 的栈），栈上反复出现
+`trap → user_page_fault → zcomp_refault → page_alloc → pmap_map → pmap_enter`。
+
+根因在 `page_alloc()` 的回收钩子：
+
+```c
+if (page_free_list == 0 && page_ninuse > 4096 && !in_zcomp && cur != 0)
+        (void)zcomp_reclaim(8);
+```
+
+- `page_ninuse > 4096` 就是 **16MB**。512MB guest 一旦用到 16MB，之后每次分配
+  都尝试压缩 8 页；而 fork 一次要分配页目录、页表、内核栈，于是普通 fork 抖动
+  变成压缩风暴。
+- 更糟的是它也会在**缺页处理内部**触发：缺页 → 分配页 → 回收压缩了处理程序
+  马上要写的页/重试指令要访问的页 → 再次缺页，两者互相追逐。
+
+两处修复：
+
+- 水位改为物理内存的 3/4（小机器保留 4096 页下限），见 `reclaim_watermark()`。
+  512MB guest 要到约 384MB 才回收，本节的测试（峰值 125MB）根本不触发。
+- 新增 `in_fault`：`user_page_fault()` 在调用 `user_page_fault_locked()` 期间
+  置位，`page_alloc()` 在缺页路径内不做回收。
+
+### 10.6 proctest：1000 并发，子进程改成"阻塞"而不是"自旋"
+
+- `TARGET_LIVE = TARGET_SEQ = MIN_LIVE = 1000`。
+- phase B 的子进程改成**阻塞在读空管道**上。自旋在 200 个时没问题，1000 个时
+  父进程只能拿到 1/1001 的 CPU，下一次 fork 要等几分钟，测试看起来像死机。
+  阻塞在 `kthread_block_tcb()` 里不耗 CPU、仍占着进程槽和 TCB，正是这一阶段
+  要测的东西；`SIGKILL` 会唤醒它们（`sig_send` → `proc_wake` + `EINTR`），
+  所以 kill/reap 循环照旧。
+- phase C 改为 `1000 x 128KB = 125MB`（原来 200 x 384KB = 75MB）。仍然明显
+  越过旧 CMOS 探测的 64MB/bump 的 63MB 上界，同时塞得进 512MB guest。
+- `/dev/ps` 快照缓冲从 8KB 扩到 32KB（1024 行 x 约 24 字节 = 24.6KB）。
+
+### 10.7 实测（QEMU 与 VMware，512MB）
+
+```
+usermode: COW refcount 130783 pages (256 KB, 16-bit) at fec00000
+kthread: 1024 thread slots at ff000000
+usermode: 1024 proc slots at fed00000 (1808 KB)
+
+proctest: dynamic process count test (target live=1000)
+proctest: phase A 1000 sequential fork/wait cycles (each child
+proctest:   exits at once by design - this proves slot reuse)
+proctest: phase B simultaneous live children = 1000 (target 1000)
+proctest: kernel /dev/ps lists 1002 live processes (expect at least 1000)
+proctest: reaped 1000/1000 children
+proctest: phase C 1000 children x 128 KB = 125 MB held at once
+proctest: PASS
+
+mem: 2951 pages in use, 52017 allocated, next free 2508000
+```
+
+`/dev/ps` 的 1002 条 = 1000 个阻塞子进程 + proctest + sh，是内核自己的进程表
+读出来的，不是测试自报的计数。手动看的话在 shell 里跑 `/bin/proctest -i`：
+它会在 1000 个子进程全部阻塞后打印进程表的前 6 行、省略提示、后 4 行，按回车
+才释放。
+
+余量：512MB guest 下 1000 进程 + 125MB 数据峰值约占 203MB（`next free
+0x2508000`），还有一倍以上空间；再往上受 `NPROC = 1024` 和 8MB 栈池限制。
+
+### 10.8 相关文件
+
+- `kernel/sys/usermode.c`：`NPROC`、`PROC_TABLE_VA`、`PAGE_REF_VA`（16 位）、
+  `kern_window_install()`、`reclaim_watermark()`、`in_fault`、`ps_snap_buf`
+- `kernel/thread/kthread.h` / `kthread.c`：`NKTHREAD`、`KSTACK_VA`、
+  `KTHREAD_TABLE_VA`、`kthread_prime_stacks()`
+- `kernel/arch/i386/i386/pmap.c`：`pmap_enter()` 缺页表 panic
+- `kernel/sys/glue.c`：`main()` 里调用 `kthread_prime_stacks()`
+- `libexec/proctest.c`：1000 并发、阻塞式子进程、phase C 125MB

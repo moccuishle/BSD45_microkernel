@@ -932,6 +932,17 @@ pmap_enter(pmap, va, pa, prot, wired)
 	}
 
 	pte = pmap_pte(pmap, va);
+	/*
+	 * S410: pmap_enter() does not build page tables.  If the PDE for this
+	 * address is missing, pmap_pte() returns 0 and the next dereference
+	 * faults on address 0 - which surfaces as "TRAP 12 (stack fault)
+	 * cr2=0" with no hint at all about what went wrong (it cost an hour
+	 * of disassembly).  Say what happened instead.
+	 * pmap_enter 不建页表：缺 PDE 时 pmap_pte 返回 0，紧接着的访存会打在
+	 * 地址 0 上，表现为 "TRAP 12 cr2=0"，完全看不出原因。这里直接报清楚。
+	 */
+	if (pte == 0)
+		panic("pmap_enter: no page table for va %x (pmap %x)", va, pmap);
 	opa = pmap_pte_pa(pte);
 #ifdef DEBUG
 	if (pmapdebug & PDB_ENTER)

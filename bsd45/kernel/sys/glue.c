@@ -449,6 +449,15 @@ printf("\n");
 	 */
 	kthread_init();
 	proc_table_init();		/* shared-window proc table (before pmap_create) */
+	/*
+	 * S410: build the page tables for the upper halves of the 1024-slot
+	 * kernel stack pool.  Must happen before any user page directory is
+	 * created, because those copy the kernel PDEs once and the stacks
+	 * themselves are mapped lazily.
+	 * S410：为 1024 槽内核栈池的高地址窗口预建页表。必须早于任何用户页目录
+	 * 创建——用户页目录只在创建时拷一次内核 PDE，而栈本身是按需映射的。
+	 */
+	kthread_prime_stacks();
 	softirq_init();
 	vfs_aio_init();
 	aio_user_init();

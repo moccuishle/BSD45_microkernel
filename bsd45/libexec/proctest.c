@@ -34,29 +34,29 @@
 
 /*
  * Children to keep alive at once in phase B.  The process table and TCB pool
- * now live in the shared kernel window (NPROC = NKTHREAD = 1024), so the old
- * hard cap of 8 (and the boot-loader-derived cap of 24) is gone.  The binding
- * limit is physical memory: fork returns -EAGAIN when page_alloc runs out.
- * 200 live children needs a few MB and far exceeds the original NPROC=8.
- * 200 个存活子进程只需几 MB，远超原来的 NPROC=8 与引导器上限 24。
- * 同时存活的子进程数：进程表与 TCB 池已移入共享内核窗口（NPROC = NKTHREAD =
- * 1024），旧的 8（以及受引导器限制的 24）上限不复存在。真正瓶颈是物理内存，
- * page_alloc 耗尽时 fork 返回 -EAGAIN。200 个存活子进程仅需几 MB。
+ * now live in the shared kernel window (NPROC = NKTHREAD = 1024, S410), so
+ * the old hard cap of 8, the loader-derived cap of 24 and the 256-slot table
+ * of S407 are all gone.  The binding limit is physical memory: fork returns
+ * -EAGAIN when page_alloc runs out (and -EAGAIN from the slot table first if
+ * 1000 children plus the shell do not fit).
+ * 1000 并发子进程：进程表与 TCB 池已扩到 1024（S410）。真正的瓶颈先是槽位表，
+ * 再是物理内存（page_alloc 耗尽时 fork 返回 -EAGAIN）。
  */
-#define	TARGET_LIVE	200
-#define	TARGET_SEQ	200	/* phase A sequential fork/wait cycles */
-#define	MIN_LIVE	150	/* must be far beyond the old 8 */
+#define	TARGET_LIVE	1000
+#define	TARGET_SEQ	1000	/* phase A sequential fork/wait cycles */
+#define	MIN_LIVE	1000	/* must be far beyond the old 8 / 24 / 256 */
 /*
- * Phase C: memory footprint.  200 children x 384 KB = 75 MB, comfortably
+ * Phase C: memory footprint.  1000 children x 128 KB = 125 MB, comfortably
  * past the 64 MB the old CMOS detection reported (and the 63 MB ceiling the
- * bump allocator used to stop at).  Pages are demand-zero, so each child
- * really has to touch them.
- * 阶段 C：内存占用。200 个子进程 × 384KB = 75MB，明显越过旧 CMOS 探测的
- * 64MB（以及 bump 分配器原先 63MB 的上界）。页是按需零页，子进程必须真的写。
+ * bump allocator used to stop at) while still fitting a 512 MB guest
+ * alongside 1000 x 8 KB kernel stacks and the 1.77 MB process table.
+ * 阶段 C：内存占用。1000 × 128KB = 125MB，越过旧 CMOS 探测的 64MB（以及 bump
+ * 分配器 63MB 的上界），同时仍能塞进 512MB guest（还有 1000×8KB 内核栈与
+ * 1.77MB 进程表）。
  */
-#define	TOUCH_BYTES	(384 * 1024)
+#define	TOUCH_BYTES	(128 * 1024)
 
-static volatile int child_spinner;
+/* S410: the children block on a pipe instead of spinning (see phase B). */
 
 /*
  * Read /dev/ps while the children are alive and report what the kernel really
@@ -71,7 +71,7 @@ static volatile int child_spinner;
 static int
 ps_report(int expect, int verbose)
 {
-	static char psbuf[8192];
+	static char psbuf[32768];	/* 1024 rows x ~24 bytes */
 	char line[128];
 	char *p;
 	int fd, n, i, lines = 0, idx = 0;
@@ -127,6 +127,7 @@ main(int argc, char **argv)
 {
 	pid_t kids[TARGET_LIVE];
 	pid_t kids2[TARGET_LIVE];
+	int pfd[2];
 	int nkids = 0;
 	int st, i, made, reaped, fail = 0;
 	int interactive = (argc > 1 && argv[1][0] == '-' && argv[1][1] == 'i');
@@ -155,6 +156,29 @@ main(int argc, char **argv)
 		fail = 1;
 
 	/* ---- Phase B: keep TARGET_LIVE children alive simultaneously ---- */
+	/*
+	 * The children block on an empty pipe instead of spinning.
+	 *
+	 * S410: spinning was fine for 200 children, but with 1000 of them the
+	 * parent only got 1/1001 of the CPU and took minutes to place the next
+	 * fork - the test looked hung.  A blocking read parks each child in
+	 * kthread_block_tcb() (state BLOCK) so it costs no CPU while still
+	 * occupying a process slot and a TCB, which is exactly what this phase
+	 * is supposed to measure.  The parent never writes to the pipe, so the
+	 * read only returns when the child is signalled; SIGKILL wakes it
+	 * (sig_send -> proc_wake + EINTR) and it exits, which is how the
+	 * kill/reap loop below drains them.
+	 * 子进程改成阻塞在读空管道上。自旋在 200 个时还行，1000 个时父进程只能拿到
+	 * 1/1001 的 CPU，下一次 fork 要等几分钟，看起来像死机。阻塞读会让每个子进程
+	 * 停在 kthread_block_tcb()（状态 BLOCK），不耗 CPU 但仍占着进程槽和 TCB——
+	 * 正是这一阶段要测的东西。父进程从不写这个管道，所以 read 只在收到信号时
+	 * 返回；SIGKILL 会唤醒它（sig_send → proc_wake + EINTR），随后退出，下面的
+	 * kill/reap 循环就是这样回收它们的。
+	 */
+	if (pipe(pfd) < 0) {
+		printf("proctest: pipe failed (errno %d)\n", errno);
+		return (1);
+	}
 	for (i = 0; i < TARGET_LIVE; i++) {
 		pid_t p = fork();
 
@@ -164,10 +188,10 @@ main(int argc, char **argv)
 			break;
 		}
 		if (p == 0) {
-			/* Child: spin cooperatively until killed by parent. */
-			for (;;) {
-				child_spinner++;
-			}
+			char c;
+
+			(void)read(pfd[0], &c, 1);	/* blocks; no data ever comes */
+			_exit(0);
 		}
 		kids[nkids++] = p;
 	}
@@ -206,7 +230,7 @@ main(int argc, char **argv)
 		 */
 		char c[2];
 
-		printf("proctest: %d children are spinning; press Enter to kill them\n",
+		printf("proctest: %d children are blocked on a pipe; press Enter to kill them\n",
 		    nkids);
 		if (read(0, c, sizeof(c)) < 0)
 			;		/* no console: just carry on */

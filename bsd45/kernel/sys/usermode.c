@@ -154,12 +154,14 @@ static struct file ramfs[] = {
 
 /*
  * S409: /dev/ps snapshot.  File scope (not function-static) so the read path
- * can re-render it at the start of every open; see the FD_PS branch.  8 KB
- * holds a full 256-slot table (~22 bytes per line).
- * /dev/ps 快照：放在文件作用域，读取路径才能在每次 open 时重新渲染；8KB 足够
- * 写满 256 个槽（每行约 22 字节）。
+ * can re-render it at the start of every open; see the FD_PS branch.
+ * S410: 32 KB, not 8 KB - NPROC is 1024 now and a row is ~24 bytes, so a
+ * full table is ~24.6 KB and 8 KB would have truncated `ps` at ~340 rows.
+ * /dev/ps 快照：放在文件作用域，读取路径才能在每次 open 时重新渲染。
+ * S410：NPROC 已到 1024，单行约 24 字节，全表约 24.6KB，8KB 会在 340 行处
+ * 截断，所以扩到 32KB。
  */
-static char	ps_snap_buf[8192];
+static char	ps_snap_buf[32768];
 static int	ps_snap_len;
 
 /*
@@ -204,12 +206,18 @@ static int	ps_snap_len;
  *     resolved to the Microsoft Store stub, inflating the image to 618 KB -
  *     more than the 576 KB the BIOS can stage).
  *
- * NPROC x sizeof(struct proc) = 256 x 1808 = 452 KB of kernel VA (not image).
+ * NPROC x sizeof(struct proc) = 1024 x 1808 = 1.77 MB of kernel VA (not image).
  * Two ceilings remain: the slot table (fork returns -EAGAIN when it is full)
  * and physical memory (page_alloc() panics - there is no swapper to page
  * out to, so running out of RAM is a kernel bug, not a per-process error;
  * with S408's BIOS/E801 detection a 512 MB guest really does hand out
  * 511 MB, which proctest's 75 MB phase exercises).
+ * S410: 256 -> 1024 slots.  1024 x 1808 = 1.77 MB does not fit in the
+ * 0xFE340000..0xFE3FFFFF gap any more, so the table moved up to 0xFED00000,
+ * above every existing kernel window (see the VA map in the header comment
+ * of this file).  A thousand live processes also needs a 16-bit COW
+ * refcount - a byte saturates at 255 and page_put() would then free a page
+ * that 745 children still map.
  * 进程表容量（S407）。旧的 24 是**引导器**上限：.bss 必须在 0x90000 的 stage2
  * 之下（INT 13h 也不写 0xA0000 以上，暂存镜像上限 576KB），24 x 1808 刚好塞满。
  * 现在两个约束都没了：procs[] 不再属于 .bss，而在 PROC_TABLE_VA 窗口里（物理页
@@ -222,8 +230,11 @@ static int	ps_snap_len;
  * panic——本端口没有 swap，内存耗尽是内核缺陷而不是单进程错误。S408 的
  * BIOS/E801 探测让 512MB guest 真的能发放 511MB，proctest 的 75MB 阶段就是
  * 在验证这一点。
+ * S410 把 256 提到 1024：1.77MB 已塞不进 0xFE340000..0xFE3FFFFF 那 768KB 空档，
+ * 表搬到 0xFED00000（见本文件头部 VA 图）；同时 COW 引用计数必须改成 16 位，
+ * 单字节在 255 饱和，1000 个子进程共享一页时 page_put 会释放别人还映射的页。
  */
-#define	NPROC		256		/* process slots (was 24: loader layout) */
+#define	NPROC		1024		/* process slots (was 24: loader layout) */
 /* TID namespace constants (TID_USER_BASE/STRIDE/KERN_BASE) live in kthread.h. */
 #define	P_FREE		0
 #define	P_RUN		1
@@ -270,18 +281,32 @@ static int	ps_snap_len;
  * NPROC from the loader's 0x90000 ceiling).  procs[i] / &procs[i] keep their
  * meaning: kern_table_alloc() hands back one contiguous block.
  *
- * The address matters.  0xFE340000 sits right after the zcomp pool
- * (0xFE300000 + 256 KB) and below CD_IMAGE_VA (0xFE400000), which cd_map()
- * re-maps on every exec: parking the table there made execve see argc 0
- * because the image mapping overwrote it.  Budget 0xFE340000..0xFE3FFFFF =
- * 768 KB; the TCB pool continues at 0xFE3C0000.
+ * The address matters twice over:
+ *   - it must not sit inside CD_IMAGE_VA (0xFE400000 + up to 4 MB), which
+ *     cd_map() re-maps on every exec.  Parking the table at 0xFE400000 made
+ *     execve read argc 0, which is why S408 moved it to 0xFE340000;
+ *   - 1024 slots need 1.77 MB, which does not fit the 768 KB gap between the
+ *     zcomp pool and the CD window any more (S410).
+ * So the table now lives above 0xFEC00000, in kernel windows whose page
+ * tables are shared into every user page directory (see user_pd_create):
+ *
+ *   0xFEC00000  1 MB   COW refcount table (16-bit entries, 2 GB of RAM)
+ *   0xFED00000  1.77M  this process table (1024 x 1808)
+ *   0xFEF00000  1 MB   TCB pool (kernel/thread/kthread.h)
+ *   0xFF000000  8 MB   kernel stacks, 1024 x 8 KB (kthread.h)
+ *
+ * None of these can collide with a CD image, a page-cache page or a user
+ * mapping, and they sit above the 12 MB identity window locore builds.
  * 进程表放在内核 VA 窗口而不是 .bss，正是这一点让 NPROC 摆脱了引导器 0x90000
  * 的天花板；kern_table_alloc() 返回一段连续内存，procs[i] 语义不变。
- * 地址很关键：0xFE340000 紧跟 zcomp 池（0xFE300000+256KB），且在 CD_IMAGE_VA
- * （0xFE400000）之下——cd_map() 每次 exec 都会重映射那里，把表放在那儿会让
- * execve 拿到 argc 0。可用 768KB，TCB 池接在 0xFE3C0000。
+ * 地址有两个讲究：一不能落在 CD_IMAGE_VA（0xFE400000 起 4MB，cd_map() 每次
+ * exec 都重映射）里——S408 之前表在 0xFE400000 导致 execve 拿到 argc 0；二
+ * 1024 个槽要 1.77MB，已塞不进 zcomp 池与 CD 窗口之间那 768KB（S410）。
+ * 因此表搬到 0xFEC00000 以上，那几段的页表会被拷进每个用户页目录（见
+ * user_pd_create）；它们既不与 CD 映像/页缓存/用户映射冲突，也在 locore 建的
+ * 12MB 恒等映射窗口之上。
  */
-#define	PROC_TABLE_VA	0xFE340000
+#define	PROC_TABLE_VA	0xFED00000
 static struct proc	*procs;
 static struct proc	*cur;		/* current process (kernel object) */
 static struct kthread	*cur_thread;	/* current execution flow */
@@ -408,6 +433,42 @@ page_alloc_set_floor(unsigned pa)
  * 从 bump 分配器预留一段连续物理内存并映射到固定内核 VA。进程表与 TCB 池
  * 都这样分配，容量只受内存限制，不再受镜像布局限制。
  */
+/*
+ * S410: install the page table for one 4 MB kernel window.
+ *
+ * locore only identity-maps 12 MB above KERNBASE (PDEs 0x3f8..0x3fa), and
+ * pmap_enter() does *not* build page tables on demand - it calls pmap_pte(),
+ * which returns 0 for a missing PDE, and then dereferences that 0 (reported
+ * as TRAP 12 with cr2=0, which is exactly how the first attempt at this
+ * layout died).  Every kernel window above 0xFEC00000 therefore has to be
+ * opened explicitly before anything is mapped into it.
+ * 为一个 4MB 内核窗口建页表。locore 只恒等映射 KERNBASE 以上 12MB
+ * （PDE 0x3f8..0x3fa），而 pmap_enter() 不会按需建页表——它调 pmap_pte()，
+ * 缺 PDE 时返回 0，随后解引用 0（表现为 TRAP 12 + cr2=0，S410 第一次尝试就是
+ * 这么死的）。因此 0xFEC00000 以上的每个窗口都必须先显式打开。
+ */
+static int
+kern_window_install(unsigned va)
+{
+	unsigned pdi = va >> 22;
+	unsigned *pd = (unsigned *)kernel_pmap->pm_pdir;
+	unsigned ptpa, *pt;
+	int i;
+
+	if (pdi >= 1024)
+		return (-1);
+	if (pd[pdi] & PG_V)
+		return (0);		/* already installed */
+	ptpa = page_alloc();
+	pt = map_page(SCRATCH_PT, ptpa);
+	for (i = 0; i < PAGE_SIZE / 4; i++)
+		pt[i] = 0;
+	/* supervisor-only: user page directories copy this PDE but the PTEs
+	 * pmap_map() installs are supervisor as well. */
+	pd[pdi] = ptpa | PG_V | PG_RW;
+	return (0);
+}
+
 void *
 kern_table_alloc(unsigned va, unsigned size)
 {
@@ -423,11 +484,15 @@ kern_table_alloc(unsigned va, unsigned size)
 		if (pa != pa0 + i * PAGE_SIZE)
 			panic("kern_table_alloc: non-contiguous pages at %x", pa);
 	}
-	for (i = 0; i < n; i++)
+	for (i = 0; i < n; i++) {
+		/* open a new 4 MB kernel window when the range starts one */
+		if (((va + i * PAGE_SIZE) & ((4u * 1024 * 1024) - 1)) == 0)
+			(void)kern_window_install(va + i * PAGE_SIZE);
 		pmap_map((vm_offset_t)(va + i * PAGE_SIZE),
 		    (vm_offset_t)(pa0 + i * PAGE_SIZE),
 		    (vm_offset_t)(pa0 + (i + 1) * PAGE_SIZE),
 		    VM_PROT_READ | VM_PROT_WRITE);
+	}
 	bzero((void *)va, n * PAGE_SIZE);
 	return ((void *)va);
 }
@@ -439,7 +504,8 @@ static unsigned page_free_list;
 static unsigned page_nalloc, page_nfree, page_ninuse;
 
 /*
- * COW reference counts (os.md mechanism 2/3).  One byte per physical page.
+ * COW reference counts (os.md mechanism 2/3).  One 16-bit count per physical
+ * page (S410; it was a byte, which could not describe 1000 sharers).
  *
  * The table used to be a .bss array covering only the first 64 MB
  * (1 << 14 entries): with the kernel staged below 1 MB, .bss had to end
@@ -450,23 +516,50 @@ static unsigned page_nalloc, page_nfree, page_ninuse;
  *
  * Now the kernel is linked at physical 0x101000 (see boot/i386/kernel.ld),
  * so .bss no longer constrains the table; but a fixed 4 GB table would cost
- * 1 MB of RAM in every guest.  Instead page_ref_init() sizes it from the
+ * 2 MB of RAM in every guest.  Instead page_ref_init() sizes it from the
  * BIOS-reported physmem and maps it into PAGE_REF_VA, so the table grows
- * with the machine and costs 1 byte per page (512 MB guest -> 128 KB).
+ * with the machine (512 MB guest -> 256 KB).
  * Calls made before page_ref_init() runs (bootstrap tables) see page_ref ==
  * 0 and are simply not refcounted; nothing is COW-shared that early.
- * COW 引用计数表。过去是 .bss 里只覆盖前 64MB 的数组（内核暂存在 1MB 以下，
- * .bss 必须在 0x90000 的 stage2 之前结束，更大的表放不下），512MB guest 一旦
- * 分配超过 64MB，page_index() 返回 0，page_ref_inc() 变成空操作，page_put()
- * 就会释放别的进程还在映射的页。现在内核链接在物理 0x101000，.bss 不再限制
- * 表的大小；但固定 4GB 表会在每个 guest 里白占 1MB，所以改由 page_ref_init()
- * 按 BIOS 探测到的 physmem 定容并映射到 PAGE_REF_VA：表随机器大小增长，每页
- * 1 字节（512MB guest 只需 128KB）。在它之前发生的分配（引导期表）看到
- * page_ref == 0，不做引用计数——那个阶段还没有任何 COW 共享。
+ * COW 引用计数表，每物理页一个 16 位计数（S410；原来是字节，描述不了 1000 个
+ * 共享者）。过去是 .bss 里只覆盖前 64MB 的数组（内核暂存在 1MB 以下，.bss 必须
+ * 在 0x90000 的 stage2 之前结束，更大的表放不下），512MB guest 一旦分配超过
+ * 64MB，page_index() 返回 0，page_ref_inc() 变成空操作，page_put() 就会释放别的
+ * 进程还在映射的页。现在内核链接在物理 0x101000，.bss 不再限制表的大小；但固定
+ * 4GB 表会在每个 guest 里白占 2MB，所以改由 page_ref_init() 按 BIOS 探测到的
+ * physmem 定容并映射到 PAGE_REF_VA：表随机器大小增长（512MB guest 256KB）。
+ * 在它之前发生的分配（引导期表）看到 page_ref == 0，不做引用计数——那个阶段还
+ * 没有任何 COW 共享。
  */
-#define	PAGE_REF_VA	0xFE900000	/* 1 MB window: 1 byte/page -> 4 GB */
-#define	PAGE_REF_MAX	(1u * 1024 * 1024)
-static unsigned char	*page_ref;	/* one refcount byte per physical page */
+/*
+ * S410: 16-bit entries, and a window of their own.
+ *
+ * Two independent bugs forced this:
+ *   - the counts were bytes.  page_ref_inc() saturated at 255, so with 1000
+ *     children sharing the parent's pages the count stopped rising, and once
+ *     745 of them had exited page_put() saw 1 and freed a page the remaining
+ *     254 still mapped.  1024 slots therefore need a 16-bit counter.
+ *   - PAGE_REF_VA was 0xFE900000, the same address as the page cache's
+ *     PCACHE_VA.  Reading a file through tmpfs/ffs/jlfs would map cache pages
+ *     straight over the refcount table, so page_ref_get() returned file data.
+ *     The table moved to 0xFEC00000, which nothing else uses.
+ *
+ * The window is 1 MB, so 1 MB / 2 bytes = 524288 pages = 2 GB of RAM.  A
+ * larger guest would need a 2 MB window (see the VA map at PROC_TABLE_VA -
+ * there is no room left above 0xFEC00000 for one).
+ * COW 引用计数表。16 位 + 独占窗口，两个独立缺陷逼出来的：
+ *   - 原来是字节计数，page_ref_inc() 在 255 饱和；1000 个子进程共享父进程的页
+ *     时计数不再增长，等到 745 个退出后 page_put 看到 1，就把剩下 254 个还在
+ *     映射的页释放掉了。1024 槽必须用 16 位。
+ *   - PAGE_REF_VA 原来是 0xFE900000，与页缓存的 PCACHE_VA 同址：经
+ *     tmpfs/ffs/jlfs 读文件会把缓存页直接映射到引用计数表上，page_ref_get()
+ *     读回的就是文件内容。现在搬到没人用的 0xFEC00000。
+ * 窗口 1MB，即 1MB/2 = 524288 页 = 2GB 内存；更大的 guest 需要 2MB 窗口，而
+ * 0xFEC00000 以上已经没有空间（见 PROC_TABLE_VA 处的表的 VA 图）。
+ */
+#define	PAGE_REF_VA	0xFEC00000	/* 1 MB window: 2 bytes/page -> 2 GB */
+#define	PAGE_REF_MAX	(1u * 1024 * 1024 / 2)	/* entries, not bytes */
+static unsigned short	*page_ref;	/* one refcount per physical page */
 static unsigned	page_ref_pages;		/* entries actually mapped */
 unsigned	cow_faults;
 unsigned	cow_copies;
@@ -492,7 +585,7 @@ page_ref_set(unsigned pa, unsigned v)
 	unsigned i = page_index(pa);
 
 	if (i != 0)
-		page_ref[i] = (unsigned char)v;
+		page_ref[i] = (unsigned short)v;
 }
 
 /* 中文：读取物理页的 COW 引用计数，超出表范围的页视作独占返回 1 */
@@ -505,14 +598,14 @@ page_ref_get(unsigned pa)
 	return (i != 0 ? page_ref[i] : 1);
 }
 
-/* 中文：递增物理页的 COW 引用计数，上限 255，超出表范围则忽略 */
-/* EN: Increment a physical page's COW reference count up to 255, ignoring pages outside the table */
+/* 中文：递增物理页的 COW 引用计数，上限 65535，超出表范围则忽略 */
+/* EN: Increment a physical page's COW reference count up to 65535, ignoring pages outside the table */
 static void
 page_ref_inc(unsigned pa)
 {
 	unsigned i = page_index(pa);
 
-	if (i != 0 && page_ref[i] < 255)
+	if (i != 0 && page_ref[i] < 65535)
 		page_ref[i]++;
 }
 
@@ -554,12 +647,12 @@ page_ref_init(void)
 	pages = (physmem > 0) ? (unsigned)physmem : (0x4000000u >> 12);
 	if (pages > PAGE_REF_MAX)
 		pages = PAGE_REF_MAX;
-	bytes = pages * (unsigned)sizeof(unsigned char);
+	bytes = pages * (unsigned)sizeof(unsigned short);
 	bytes = (bytes + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 	(void)kern_table_alloc((unsigned)PAGE_REF_VA, bytes);
 	page_ref_pages = pages;
-	page_ref = (unsigned char *)(unsigned)PAGE_REF_VA;
-	printf("usermode: COW refcount %d pages (%d KB) at %x\n",
+	page_ref = (unsigned short *)(unsigned)PAGE_REF_VA;
+	printf("usermode: COW refcount %d pages (%d KB, 16-bit) at %x\n",
 	    pages, bytes / 1024, PAGE_REF_VA);
 }
 
@@ -641,9 +734,47 @@ vfs_page_stats(unsigned *nalloc, unsigned *nfreed, unsigned *ninuse)
 
 static int zcomp_reclaim(int n);
 static int in_zcomp;
+/*
+ * S410: set while a user page fault is being handled.
+ *
+ * page_alloc() reclaims by compressing private anonymous pages of the current
+ * process.  Doing that inside the fault path livelocks: the fault allocates a
+ * page (triggering reclaim), reclaim compresses the page the handler is about
+ * to write or the page the retried instruction is about to touch, the
+ * instruction faults again, and the two chase each other.  With 1000 children
+ * this wedged the machine at child 417 with CR2 pinned on one stack page.
+ * 用户缺页处理期间置位。page_alloc() 的回收会压缩当前进程的私有匿名页，若在
+ * 缺页路径里做，就会自锁：缺页分配一页（触发回收），回收又压缩了处理程序即将
+ * 写入的页或重试指令要访问的页，指令再次缺页，两者互相追逐。1000 个子进程时
+ * 机器就卡在第 417 个，CR2 固定在某一个栈页上。
+ */
+static int in_fault;
 static int user_ok(unsigned p, unsigned len);
 static int user_ok_w(unsigned p, unsigned len);
 static void proc_sched(void);
+
+/*
+ * Reclaim watermark, in pages.
+ *
+ * It used to be a flat `page_ninuse > 4096`, i.e. 16 MB.  On a 512 MB guest
+ * that made *every* allocation past 16 MB attempt to compress 8 pages, which
+ * turned ordinary fork churn into a compression storm (each fork allocates a
+ * page directory, page tables and a kernel stack).  Reclaim is meant for
+ * genuine pressure, so the trigger is now three quarters of physical memory,
+ * with the old 4096-page floor kept for tiny machines.
+ * 回收水位（页）。原来是固定的 `page_ninuse > 4096`（16MB）：512MB guest 一旦用到
+ * 16MB，之后每次分配都要压缩 8 页，普通的 fork 抖动就变成压缩风暴（每次 fork
+ * 都要分配页目录、页表和内核栈）。回收本该只在真正吃紧时发生，因此改成物理内存
+ * 的 3/4，小机器仍保留 4096 页的下限。
+ */
+#define	RECLAIM_FLOOR	4096u
+static int
+reclaim_watermark(void)
+{
+	unsigned hi = (physmem > 0) ? ((unsigned)physmem / 4u * 3u) : 0;
+
+	return ((int)(hi > RECLAIM_FLOOR ? hi : RECLAIM_FLOOR));
+}
 
 /* 中文：分配一页物理内存：内存紧张时先尝试压缩回收私有匿名页，否则从空闲链表取或推进 bump 指针 */
 /* EN: Allocate a physical page: under memory pressure first try to reclaim private anonymous pages via compression, then pop the free list or bump the pointer */
@@ -661,8 +792,8 @@ page_alloc(void)
 	 * 压缩后的页仍在 RAM 中，用 CPU 换空间，而不是写 swap（本端口没有
 	 * swap 设备）。
 	 */
-	if (page_free_list == 0 && page_ninuse > 4096 && !in_zcomp &&
-	    cur != 0)
+	if (page_free_list == 0 && page_ninuse > (unsigned)reclaim_watermark() &&
+	    !in_zcomp && !in_fault && cur != 0)
 		(void)zcomp_reclaim(8);
 	if (page_free_list != 0) {
 		unsigned *p = map_page(SCRATCH_PAGE, page_free_list);
@@ -812,8 +943,19 @@ user_pd_create(void)
 
 	for (i = 0; i < PAGE_SIZE / 4; i++)
 		pd[i] = 0;
-	/* share kernel high-half + proc0 kernel stack mappings */
-	for (i = 0x3f6; i <= 0x3fa; i++)
+	/*
+	 * Share the kernel windows: 0x3f6..0x3fa were the original set, and
+	 * S410's tables live in 0x3fb (COW refcounts, process table, TCB pool)
+	 * and 0x3fc/0x3fd (1024 kernel stacks).  A user page directory that
+	 * did not get those PDEs would fault the moment a thread with a high
+	 * TCB slot ran - the stacks are filled lazily, so slots above 255 are
+	 * only mapped after boot, long after this copy.
+	 * 共享内核窗口：0x3f6..0x3fa 是原来的范围，S410 的表在 0x3fb（COW 引用
+	 * 计数、进程表、TCB 池）与 0x3fc/0x3fd（1024 个内核栈）。若用户页目录没
+	 * 拷到这些 PDE，高槽位 TCB 第一次运行时就会缺页——栈是按需映射的，255 以上
+	 * 的槽位在开机很久之后才建立，晚于这次拷贝。
+	 */
+	for (i = 0x3f6; i <= 0x3fd; i++)
 		pd[i] = ((unsigned *)kernel_pmap->pm_pdir)[i];
 	return (pdpa);
 }
@@ -2771,8 +2913,26 @@ demand_page(unsigned va)
  */
 /* 中文：用户态缺页入口：非 present 页交给压缩重填/按需零页/mmap 缺页处理，COW 写故障则独占或复制页，返回是否处理成功 */
 /* EN: User page-fault entry: route not-present faults to zcomp/demand-zero/mmap handlers and handle COW write faults by taking ownership or copying, returning whether handled */
+static int user_page_fault_locked(unsigned, unsigned);
+
 int
 user_page_fault(unsigned va, unsigned err)
+{
+	int r;
+
+	/*
+	 * S410: mark the fault path so page_alloc() does not try to reclaim
+	 * (compress) pages out from under the handler.  See in_fault.
+	 * S410：标记缺页路径，避免 page_alloc() 在处理过程中压缩页面（见 in_fault）。
+	 */
+	in_fault = 1;
+	r = user_page_fault_locked(va, err);
+	in_fault = 0;
+	return (r);
+}
+
+static int
+user_page_fault_locked(unsigned va, unsigned err)
 {
 	unsigned *pt;
 	unsigned pti, pa, npa;

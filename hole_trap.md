@@ -82,3 +82,55 @@
   验证：`bios 640K+64512K e801 15360K. maxmem 1fedf000` → 511 MB；
   proctest 新增 phase C（200×384KB=75MB 同时占用）PASS。
 
+
+## 坑 13：给内核加新 VA 窗口后，`TRAP 12 / cr2=0` 就死在 `pmap_enter` 里
+
+**现象**：把 COW 引用计数表从 `0xFE900000` 搬到 `0xFEC00000`（locore 12MB
+恒等映射窗口之外），内核在 `page_ref_init()` 阶段直接停机：
+
+```
+*** kernel TRAP 12 (stack fault) err=0
+eip=fe112f8a ... cr2=0
+```
+
+**根因**：`pmap_enter()` 不会按需创建页表。`pmap_pte()` 对缺失的 PDE 返回 0，
+下一行 `pmap_pte_pa(pte)` 就解引用 0，于是"卡在地址 0 上访存"，表现成 TRAP 12
+而不是 TRAP 14，`cr2=0` 是唯一的线索（实际是 `*(int *)0`）。locore 只建了
+`0x3f8..0x3fa` 三个 PDE。
+
+**修法**：用 `kern_window_install()` 显式建表（分配页表页、清零、写
+`pmd = pa | PG_V | PG_RW`），并让 `kern_table_alloc()` 在跨越 4MB 边界时自动
+调用它；同时把 `pmap_enter()` 的 `pte == 0` 改成 `panic("pmap_enter: no page
+table for va ...")`，以后再遇到一眼就能看出来。
+
+**同一类坑**：内核栈是按需映射的，所以高 4MB 窗口的 PDE 要等到对应槽位第一次
+使用时才出现——而用户页目录在开机时就拷走了内核 PDE。必须用
+`kthread_prime_stacks()` 在启动时把每个窗口的页表先建好。
+
+## 坑 14：VMware 图形界面会把 vmx 的光驱改回 `cdrom-raw / auto detect`
+
+**现象**：`vmrun start ... nogui` 返回 0，串口 0 字节，`vmware.log` 里写着
+`Cannot connect the virtual device ide1:0 because no corresponding device is
+available on the host` → `No operating system was found`。
+
+**根因**：只要在 VMware Workstation 里打开过这个虚拟机的标签页，关机时它会把
+
+```
+ide1:0.deviceType = "cdrom-image"
+ide1:0.fileName = "..\out\BSD45-ELF-x86.iso"
+```
+
+改写成
+
+```
+ide1:0.deviceType = "cdrom-raw"
+ide1:0.fileName = "auto detect"
+ide1:0.autodetect = "TRUE"
+```
+
+之后 headless 启动就没有光驱可引导。
+
+**修法**：跑自动测试前 `git checkout -- bsd45/vms/BSD45-proctest.vmx` 恢复；
+或者用一份 GUI 没打开过的 vmx 副本做自动化。另外它还会把
+`out\BSD45-ELF-x86.iso` 占住，导致 `build_iso.ps1` 追加内核失败——脚本现在会
+直接报错（见 `build_iso.ps1` 的 try/catch 与长度校验）。

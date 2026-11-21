@@ -36,7 +36,7 @@
 | 每进程 fd | `NFD = 16` | `usermode.c:61` |
 | 每进程 mmap 区 | `KPROC_NMAP = 8` | `kproc.h:23` |
 | 信号数 / 进程名 / cwd | `32` / `16` / `128` 字节 | `kproc.h:24-26` |
-| 内核栈 | 每 TCB 8 KB，VA 起点 `0xFEA00000` | `kthread.h:48-49` |
+| 内核栈 | 每 TCB 8 KB，VA 起点 `0xFF000000`（S410，1024 槽共 8MB） | `kthread.h` |
 | pid 起点 | `next_pid = 2`（0/1 保留） | `usermode.c:211` |
 
 **tid 分配规则**：

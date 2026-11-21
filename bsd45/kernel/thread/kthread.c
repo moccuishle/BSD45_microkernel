@@ -38,9 +38,13 @@ extern void bzero(void *, unsigned);
  * 0x90000 运行，因此 .bss 必须留在 0x90000 以下。窗口（物理页由 bump 分配器
  * 预留）解除这个限制，容量只受内存约束，下标语义不变——它仍是一段连续的
  * NKTHREAD 个 TCB。
+ *
+ * S410: 1024 TCBs at 0xFEF00000, i.e. between the process table (0xFED00000
+ * + 1.77 MB) and the stack window (0xFF000000).  The old 0xFE3C0000 slot was
+ * sized for 256 TCBs inside the gap under CD_IMAGE_VA.
  */
-#define	KTHREAD_TABLE_VA	0xFE3C0000	/* after procs (0xFE340000+452KB),
-						 * below CD_IMAGE_VA 0xFE400000 */
+#define	KTHREAD_TABLE_VA	0xFEF00000	/* after procs (0xFED00000+1.77MB),
+						 * below the stack window 0xFF000000 */
 struct kthread	*kthreads;
 
 extern void *kern_table_alloc(unsigned va, unsigned size);
@@ -53,6 +57,38 @@ kthread_table_init(void)
 		return;
 	kthreads = (struct kthread *)kern_table_alloc((unsigned)KTHREAD_TABLE_VA,
 	    NKTHREAD * (unsigned)sizeof(struct kthread));
+}
+
+/*
+ * Build the page tables for every 4 MB window of the stack pool.
+ *
+ * The stacks are filled lazily, so without this the PDE for the second half
+ * of the pool (0xFF400000, slot 512 onwards) would not exist until the 513th
+ * thread appeared.  User page directories copy the kernel PDEs when they are
+ * created - at boot - so every process started before that point would fault
+ * on its first high-slot thread.  Priming maps one page in each window and
+ * deliberately leaks it (8 KB): the slot that lands there re-maps the VA with
+ * a fresh page on first use.
+ * 为栈池的每个 4MB 窗口建好页表。栈是按需映射的，不预建的话 0xFF400000
+ * （第 512 个槽起）的 PDE 要等到第 513 个线程才出现；而用户页目录在创建
+ * （开机早期）时就拷走了内核 PDE，那些进程一用到高槽位线程就缺页。预建做法
+ * 是在每个窗口映射一页，并故意泄漏这 8KB——落在该地址的槽位首次使用时会用
+ * 新页重新映射同一 VA。
+ */
+void
+kthread_prime_stacks(void)
+{
+	unsigned va, end = (unsigned)KSTACK_VA + NKTHREAD * KSTACK_SIZE;
+
+	/*
+	 * kern_table_alloc() opens the 4 MB window for the address it is
+	 * given, which is the whole point here: the PDE must exist in
+	 * kernel_pmap before user page directories copy it.
+	 * kern_table_alloc 会为传入地址建 4MB 窗口页表，这正是本函数的目的：
+	 * 用户页目录拷贝内核 PDE 之前，它必须已经存在于 kernel_pmap 里。
+	 */
+	for (va = (unsigned)KSTACK_VA; va < end; va += 4 * 1024 * 1024)
+		(void)kern_table_alloc(va, PAGE_SIZE);
 }
 static unsigned	sched_esp;
 struct kthread	*curk;

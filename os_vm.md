@@ -15,7 +15,7 @@
 | `kernel/arch/i386/ctx.c` | 150+ | `hal_address_space_activate()` = 写 CR3 |
 | `kernel/vm/zcomp.c` | 269 | 内存压缩池（128 槽 × 2 KB，RLE） |
 | `kernel/vm/pagecache.c` | 458 | 文件页缓存（128 页），mmap 文件映射的后端 |
-| `kernel/thread/kthread.c` | 1000+ | 内核栈按页映射到 `0xFEA00000` |
+| `kernel/thread/kthread.c` | 1000+ | 内核栈按页映射到 `0xFF000000`（S410） |
 
 **没有编译的**（全是 4.4BSD 原树搬来的参考代码，构建脚本一行都没引用）：
 `vm/vm_map.c`（72 KB）、`vm_fault.c`、`vm_object.c`、`vm_page.c`、`vm_pageout.c`、`vm_swap.c`、`swap_pager.c`、`vnode_pager.c`、`device_pager.c`、`vm_kern.c`、`vm_mmap.c`。
