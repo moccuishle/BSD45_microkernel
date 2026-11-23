@@ -44,7 +44,7 @@
 #include <sys/conf.h>
 #include <sys/reboot.h>
 #include <sys/msgbuf.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/ioctl.h>
 #include <sys/vnode.h>
 #include <sys/file.h>
@@ -155,7 +155,7 @@ uprintf(fmt, va_alist)
 	char *fmt;
 #endif
 {
-	register struct proc *p = curproc;
+	register struct process *p = curproc;
 	va_list ap;
 
 	if (p->p_flag & P_CONTROLT && p->p_session->s_ttyvp) {
@@ -169,7 +169,7 @@ uprintf(fmt, va_alist)
 /* EN: Open a session reference for tprintf: hold the session and return a handle if the process has a controlling tty, else return NULL */
 tpr_t
 tprintf_open(p)
-	register struct proc *p;
+	register struct process *p;
 {
 
 	if (p->p_flag & P_CONTROLT && p->p_session->s_ttyvp) {

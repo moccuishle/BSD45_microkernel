@@ -43,7 +43,7 @@
 #include <sys/systm.h>
 #include <sys/ioctl.h>
 #include <sys/tty.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/user.h>
 #include <sys/conf.h>
 #include <sys/file.h>
@@ -180,14 +180,14 @@ struct isa_device *isdp;
 
 /* ARGSUSED */
 #ifdef __STDC__
-comopen(dev_t dev, int flag, int mode, struct proc *p)
+comopen(dev_t dev, int flag, int mode, struct process *p)
 #else
 /* EN: Opens a com tty: ENXIO for inactive units, installs line-discipline hooks and defaults, raises DTR/RTS, sleeps for carrier unless CLOCAL/O_NONBLOCK, then calls l_open. */
 /* 中文：打开 com tty：无活动单元返回 ENXIO，安装线路规程钩子与默认参数，拉起 DTR/RTS，在非 CLOCAL/O_NONBLOCK 时睡眠等待载波，最后调用 l_open。 */
 comopen(dev, flag, mode, p)
 	dev_t dev;
 	int flag, mode;
-	struct proc *p;
+	struct process *p;
 #endif
 {
 	register struct tty *tp;
@@ -238,7 +238,7 @@ comopen(dev, flag, mode, p)
 comclose(dev, flag, mode, p)
 	dev_t dev;
 	int flag, mode;
-	struct proc *p;
+	struct process *p;
 {
 	register struct tty *tp;
 	register com;
@@ -426,7 +426,7 @@ comioctl(dev, cmd, data, flag, p)
 	dev_t dev;
 	int cmd, flag;
 	caddr_t data;
-	struct proc *p;
+	struct process *p;
 {
 	register struct tty *tp;
 	register int unit = UNIT(dev);

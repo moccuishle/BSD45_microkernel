@@ -39,7 +39,7 @@
 #ifdef KERNEL
 #include <sys/queue.h>
 
-struct proc;
+struct process;
 struct uio;
 
 /*
@@ -61,10 +61,10 @@ struct file {
 		int	(*fo_write)	__P((struct file *fp, struct uio *uio,
 					    struct ucred *cred));
 		int	(*fo_ioctl)	__P((struct file *fp, u_long com,
-					    caddr_t data, struct proc *p));
+					    caddr_t data, struct process *p));
 		int	(*fo_select)	__P((struct file *fp, int which,
-					    struct proc *p));
-		int	(*fo_close)	__P((struct file *fp, struct proc *p));
+					    struct process *p));
+		int	(*fo_close)	__P((struct file *fp, struct process *p));
 	} *f_ops;
 	off_t	f_offset;
 	caddr_t	f_data;		/* vnode or socket */

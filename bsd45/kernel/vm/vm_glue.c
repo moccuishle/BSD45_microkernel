@@ -62,7 +62,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/resourcevar.h>
 #include <sys/buf.h>
 #include <sys/user.h>
@@ -202,7 +202,7 @@ vsunlock(addr, len, dirtied)
 /* EN: Implement fork's address-space actions: copy/share the space, allocate user struct and kernel stack, then call cpu_fork */
 int
 vm_fork(p1, p2, isvfork)
-	register struct proc *p1, *p2;
+	register struct process *p1, *p2;
 	int isvfork;
 {
 	register struct user *up;
@@ -285,7 +285,7 @@ not yet clear, yet it does... */
 /* EN: Set default VM resource limits (stack, data, resident set size) for a process */
 void
 vm_init_limits(p)
-	register struct proc *p;
+	register struct process *p;
 {
 
 	/*
@@ -324,9 +324,9 @@ int	swapdebug = 0;
 void
 scheduler()
 {
-	register struct proc *p;
+	register struct process *p;
 	register int pri;
-	struct proc *pp;
+	struct process *pp;
 	int ppri;
 	vm_offset_t addr;
 	vm_size_t size;
@@ -426,8 +426,8 @@ loop:
 void
 swapout_threads()
 {
-	register struct proc *p;
-	struct proc *outp, *outp2;
+	register struct process *p;
+	struct process *outp, *outp2;
 	int outpri, outpri2;
 	int didswap = 0;
 	extern int maxslp;
@@ -484,7 +484,7 @@ swapout_threads()
 /* EN: Swap out process p: unwire its u-area, clear P_INMEM and remove it from the run queue */
 void
 swapout(p)
-	register struct proc *p;
+	register struct process *p;
 {
 	vm_offset_t addr;
 	vm_size_t size;
@@ -523,11 +523,11 @@ swapout(p)
 	 * paging out the u-struct.
 	 */
 	{
-		extern struct proc *machFPCurProcPtr;
+		extern struct process *machFPCurProcPtr;
 
 		if (p == machFPCurProcPtr) {
 			MachSaveCurFPState(p);
-			machFPCurProcPtr = (struct proc *)0;
+			machFPCurProcPtr = (struct process *)0;
 		}
 	}
 #endif

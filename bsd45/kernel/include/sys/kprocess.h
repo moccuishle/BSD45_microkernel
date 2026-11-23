@@ -41,7 +41,7 @@
 #ifndef _SYS_PROC_H_
 #define	_SYS_PROC_H_
 
-#include <machine/proc.h>		/* Machine-dependent proc substruct. */
+#include <machine/kprocess.h>		/* Machine-dependent proc substruct. */
 #include <sys/select.h>			/* For struct selinfo. */
 #include <sys/queue.h>
 #include <sys/kproc.h>			/* Kernel-mode process runtime state + KLT list */
@@ -51,7 +51,7 @@
  */
 struct	session {
 	int	s_count;		/* Ref cnt; pgrps in session. */
-	struct	proc *s_leader;		/* Session leader. */
+	struct	process *s_leader;		/* Session leader. */
 	struct	vnode *s_ttyvp;		/* Vnode of controlling terminal. */
 	struct	tty *s_ttyp;		/* Controlling terminal. */
 	char	s_login[MAXLOGNAME];	/* Setlogin() name. */
@@ -79,9 +79,9 @@ struct	pgrp {
  * which might be addressible only on a processor on which the process
  * is running.
  */
-struct	proc {
-	struct	proc *p_forw;		/* Doubly-linked run/sleep queue. */
-	struct	proc *p_back;
+struct	process {
+	struct	process *p_forw;		/* Doubly-linked run/sleep queue. */
+	struct	process *p_back;
 	LIST_ENTRY(proc) p_list;	/* List of all processes. */
 
 	/* substructures: */
@@ -101,7 +101,7 @@ struct	proc {
 
 	pid_t	p_pid;			/* Process identifier. */
 	LIST_ENTRY(proc) p_pglist;	/* List of processes in pgrp. */
-	struct	proc *p_pptr;	 	/* Pointer to parent process. */
+	struct	process *p_pptr;	 	/* Pointer to parent process. */
 	LIST_ENTRY(proc) p_sibling;	/* List of sibling processes. */
 	LIST_HEAD(, proc) p_children;	/* Pointer to list of children. */
 
@@ -173,7 +173,7 @@ struct	proc {
 
 	/*
 	 * BSD45-port process runtime state, appended at the tail so legacy
-	 * offsets used by genassym.c/machdep.c stay valid.  struct proc is the
+	 * offsets used by genassym.c/machdep.c stay valid.  struct process is the
 	 * authoritative kernel process object: it owns the address space (uk_pd),
 	 * resources and a KLT list (uk_threads).  The uk_ prefix avoids colliding
 	 * with legacy BSD p_* fields.
@@ -322,39 +322,39 @@ extern u_long pidhash;
 extern LIST_HEAD(pgrphashhead, pgrp) *pgrphashtbl;
 extern u_long pgrphash;
 
-extern struct proc *curproc;		/* Current running proc. */
-extern struct proc proc0;		/* Process slot for swapper. */
+extern struct process *curproc;		/* Current running proc. */
+extern struct process proc0;		/* Process slot for swapper. */
 extern int nprocs, maxproc;		/* Current and max number of procs. */
 
 LIST_HEAD(proclist, proc);
 extern struct proclist allproc;		/* List of all processes. */
 extern struct proclist zombproc;	/* List of zombie processes. */
-struct proc *initproc, *pageproc;	/* Process slots for init, pager. */
+struct process *initproc, *pageproc;	/* Process slots for init, pager. */
 
 #define	NQS	32			/* 32 run queues. */
 int	whichqs;			/* Bit mask summary of non-empty Q's. */
 struct	prochd {
-	struct	proc *ph_link;		/* Linked list of running processes. */
-	struct	proc *ph_rlink;
+	struct	process *ph_link;		/* Linked list of running processes. */
+	struct	process *ph_rlink;
 } qs[NQS];
 
-struct proc *pfind __P((pid_t));	/* Find process by id. */
+struct process *pfind __P((pid_t));	/* Find process by id. */
 struct pgrp *pgfind __P((pid_t));	/* Find process group by id. */
 
 int	chgproccnt __P((uid_t uid, int diff));
-int	enterpgrp __P((struct proc *p, pid_t pgid, int mksess));
-void	fixjobc __P((struct proc *p, struct pgrp *pgrp, int entering));
-int	inferior __P((struct proc *p));
-int	leavepgrp __P((struct proc *p));
+int	enterpgrp __P((struct process *p, pid_t pgid, int mksess));
+void	fixjobc __P((struct process *p, struct pgrp *pgrp, int entering));
+int	inferior __P((struct process *p));
+int	leavepgrp __P((struct process *p));
 void	mi_switch __P((void));
 void	pgdelete __P((struct pgrp *pgrp));
 void	procinit __P((void));
-void	resetpriority __P((struct proc *));
-void	setrunnable __P((struct proc *));
-void	setrunqueue __P((struct proc *));
+void	resetpriority __P((struct process *));
+void	setrunnable __P((struct process *));
+void	setrunqueue __P((struct process *));
 void	sleep __P((void *chan, int pri));
 int	tsleep __P((void *chan, int pri, char *wmesg, int timo));
-void	unsleep __P((struct proc *));
+void	unsleep __P((struct process *));
 void	wakeup __P((void *chan));
 #endif	/* KERNEL */
 #endif	/* !_SYS_PROC_H_ */

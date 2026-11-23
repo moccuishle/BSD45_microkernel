@@ -50,7 +50,7 @@
 #include <sys/mbuf.h>
 #include <sys/buf.h>
 #include <sys/time.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/user.h>
 #include <sys/ioctl.h>
 #include <sys/map.h>
@@ -982,7 +982,7 @@ int
 bpf_select(dev, rw, p)
 	register dev_t dev;
 	int rw;
-	struct proc *p;
+	struct process *p;
 {
 	register struct bpf_d *d;
 	register int s;

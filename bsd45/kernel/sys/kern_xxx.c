@@ -36,7 +36,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/reboot.h>
 #include <vm/vm.h>
 #include <sys/sysctl.h>
@@ -49,7 +49,7 @@
 /* EN: reboot system call: after suser privilege check, call boot with the opt argument to reboot the system */
 int
 reboot(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct reboot_args /* {
 		syscallarg(int) opt;
 	} */ *uap;
@@ -70,7 +70,7 @@ reboot(p, uap, retval)
 /* EN: 4.3BSD-compatible gethostname call: read KERN_HOSTNAME via kern_sysctl to return the host name */
 int
 compat_43_gethostname(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct compat_43_gethostname_args /* {
 		syscallarg(char *) hostname;
 		syscallarg(u_int) len;
@@ -89,7 +89,7 @@ compat_43_gethostname(p, uap, retval)
 /* EN: 4.3BSD-compatible sethostname call: after suser privilege check, set the host name by writing KERN_HOSTNAME via kern_sysctl */
 int
 compat_43_sethostname(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_sethostname_args /* {
 		syscallarg(char *) hostname;
 		syscallarg(u_int) len;
@@ -111,7 +111,7 @@ compat_43_sethostname(p, uap, retval)
 /* EN: 4.3BSD-compatible gethostid call: write the global hostid into retval to return it */
 int
 compat_43_gethostid(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -127,7 +127,7 @@ compat_43_gethostid(p, uap, retval)
 /* EN: 4.3BSD-compatible sethostid call: after suser privilege check, store the argument hostid into the global hostid */
 int
 compat_43_sethostid(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct compat_43_sethostid_args /* {
 		syscallarg(int32_t) hostid;
 	} */ *uap;
@@ -145,7 +145,7 @@ compat_43_sethostid(p, uap, retval)
 /* EN: 4.3BSD-compatible quota system call placeholder: body removed, returns ENOSYS to indicate it is unimplemented */
 int
 compat_43_quota(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {

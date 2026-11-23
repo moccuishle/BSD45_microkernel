@@ -202,9 +202,9 @@ extern	char netio[], netcon[], netcls[];
 int	soo_read __P((struct file *fp, struct uio *uio, struct ucred *cred));
 int	soo_write __P((struct file *fp, struct uio *uio, struct ucred *cred));
 int	soo_ioctl __P((struct file *fp, u_long cmd, caddr_t data,
-	    struct proc *p));
-int	soo_select __P((struct file *fp, int which, struct proc *p));
-int 	soo_close __P((struct file *fp, struct proc *p));
+	    struct process *p));
+int	soo_select __P((struct file *fp, int which, struct process *p));
+int 	soo_close __P((struct file *fp, struct process *p));
 
 struct mbuf;
 struct sockaddr;

@@ -43,7 +43,7 @@
 #include <sys/filedesc.h>
 #include <sys/ioctl.h>
 #include <sys/file.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/socketvar.h>
 #include <sys/uio.h>
 #include <sys/kernel.h>
@@ -64,7 +64,7 @@
 /* ARGSUSED */
 int
 read(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct read_args /* {
 		syscallarg(int) fd;
 		syscallarg(char *) buf;
@@ -122,7 +122,7 @@ read(p, uap, retval)
 /* EN: The readv system call: scatter-read data into multiple user buffers described by an iovec array, returning the total bytes read */
 int
 readv(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct readv_args /* {
 		syscallarg(int) fd;
 		syscallarg(struct iovec *) iovp;
@@ -210,7 +210,7 @@ done:
 /* EN: The write system call: write data from a user buffer to file descriptor fd, returning bytes written and sending SIGPIPE on EPIPE */
 int
 write(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct write_args /* {
 		syscallarg(int) fd;
 		syscallarg(char *) buf;
@@ -271,7 +271,7 @@ write(p, uap, retval)
 /* EN: The writev system call: gather-write data from multiple user buffers described by an iovec array to file descriptor fd */
 int
 writev(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct writev_args /* {
 		syscallarg(int) fd;
 		syscallarg(struct iovec *) iovp;
@@ -363,7 +363,7 @@ done:
 /* ARGSUSED */
 int
 ioctl(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct ioctl_args /* {
 		syscallarg(int) fd;
 		syscallarg(u_long) com;
@@ -458,7 +458,7 @@ ioctl(p, uap, retval)
 		if (tmp <= 0) {
 			tmp = -tmp;
 		} else {
-			struct proc *p1 = pfind(tmp);
+			struct process *p1 = pfind(tmp);
 			if (p1 == 0) {
 				error = ESRCH;
 				break;
@@ -503,7 +503,7 @@ int	selwait, nselcoll;
 /* EN: The select system call: check read/write/except descriptor sets, sleeping until an event or timeout, and return the number of ready descriptors */
 int
 select(p, uap, retval)
-	register struct proc *p;
+	register struct process *p;
 	register struct select_args /* {
 		syscallarg(u_int) nd;
 		syscallarg(fd_set *) in;
@@ -608,7 +608,7 @@ done:
 /* EN: Scan the three fd sets, call fo_select on each descriptor, mark ready ones in obits and return the ready count */
 int
 selscan(p, ibits, obits, nfd, retval)
-	struct proc *p;
+	struct process *p;
 	fd_set *ibits, *obits;
 	int nfd;
 	register_t *retval;
@@ -646,7 +646,7 @@ int
 seltrue(dev, flag, p)
 	dev_t dev;
 	int flag;
-	struct proc *p;
+	struct process *p;
 {
 
 	return (1);
@@ -659,10 +659,10 @@ seltrue(dev, flag, p)
 /* EN: Record a select waiter in a selinfo structure, marking SI_COLL when another waiter already exists */
 void
 selrecord(selector, sip)
-	struct proc *selector;
+	struct process *selector;
 	struct selinfo *sip;
 {
-	struct proc *p;
+	struct process *p;
 	pid_t mypid;
 
 	mypid = selector->p_pid;
@@ -684,7 +684,7 @@ void
 selwakeup(sip)
 	register struct selinfo *sip;
 {
-	register struct proc *p;
+	register struct process *p;
 	int s;
 
 	if (sip->si_pid == 0)

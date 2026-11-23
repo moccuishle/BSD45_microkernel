@@ -45,7 +45,7 @@
  */
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/resourcevar.h>
 
 #include <vm/vm.h>
@@ -58,7 +58,7 @@ struct obreak_args {
 /* EN: Implement the traditional break() system call to change the size of a process's data segment (heap). */
 int
 obreak(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct obreak_args *uap;
 	int *retval;
 {
@@ -100,7 +100,7 @@ obreak(p, uap, retval)
 /* EN: Enlarge the process's "stack segment" to include the specified stack pointer. */
 int
 grow(p, sp)
-	struct proc *p;
+	struct process *p;
 	vm_offset_t sp;
 {
 	register struct vmspace *vm = p->p_vmspace;
@@ -134,7 +134,7 @@ struct ovadvise_args {
 /* EN: Implement the traditional vadvise() system call to advise the kernel about a process's page replacement behavior (e.g. ANOM/STABLE). */
 int
 ovadvise(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct ovadvise_args *uap;
 	int *retval;
 {

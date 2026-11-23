@@ -42,7 +42,7 @@
 #include <sys/systm.h>
 #include <sys/buf.h>
 #include <sys/ioctl.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/tty.h>
 #include <sys/conf.h>
 
@@ -53,7 +53,7 @@
 #define	ttyerrstart ((int (*) __P((struct tty *)))enodev)
 
 int	nullioctl __P((struct tty *tp, u_long cmd, caddr_t data,
-			int flag, struct proc *p));
+			int flag, struct process *p));
 
 #include "tb.h"
 #if NTB > 0
@@ -61,7 +61,7 @@ int	tbopen __P((dev_t dev, struct tty *tp));
 int	tbclose __P((struct tty *tp, int flags));
 int	tbread __P((struct tty *, struct uio *, int flags));
 int	tbioctl __P((struct tty *tp, u_long cmd, caddr_t data,
-			int flag, struct proc *p));
+			int flag, struct process *p));
 int	tbinput __P((int c, struct tty *tp));
 #endif
 
@@ -70,7 +70,7 @@ int	tbinput __P((int c, struct tty *tp));
 int	slopen __P((dev_t dev, struct tty *tp));
 int	slclose __P((struct tty *tp, int flags));
 int	sltioctl __P((struct tty *tp, u_long cmd, caddr_t data,
-			int flag, struct proc *p));
+			int flag, struct process *p));
 int	slinput __P((int c, struct tty *tp));
 int	slstart __P((struct tty *tp));
 #endif
@@ -118,7 +118,7 @@ nullioctl(tp, cmd, data, flags, p)
 	u_long cmd;
 	char *data;
 	int flags;
-	struct proc *p;
+	struct process *p;
 {
 
 #ifdef lint

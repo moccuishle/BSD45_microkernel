@@ -114,9 +114,9 @@ int	enoioctl __P((void));
 int	enxio __P((void));
 int	eopnotsupp __P((void));
 int	einval __P((void));
-int	seltrue __P((dev_t dev, int which, struct proc *p));
+int	seltrue __P((dev_t dev, int which, struct process *p));
 void	*hashinit __P((int count, int type, u_long *hashmask));
-int	nosys __P((struct proc *, void *, register_t *));
+int	nosys __P((struct process *, void *, register_t *));
 
 #ifdef __GNUC__
 volatile void	panic __P((const char *, ...));
@@ -163,8 +163,8 @@ void	statclock __P((struct clockframe *frame));
 
 void	initclocks __P((void));
 
-void	startprofclock __P((struct proc *));
-void	stopprofclock __P((struct proc *));
+void	startprofclock __P((struct process *));
+void	stopprofclock __P((struct process *));
 void	setstatclockrate __P((int hzrate));
 
 #include <libkern/libkern.h>

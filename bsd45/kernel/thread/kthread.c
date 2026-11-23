@@ -11,7 +11,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 
-#include <sys/proc.h>		/* struct proc: owning kernel process object */
+#include <sys/kprocess.h>		/* struct process: owning kernel process object */
 #include "thread/kthread.h"
 #include "sys/platform.h"
 #include "sys/smp.h"		/* S413: spinlock, cpu_id() */
@@ -203,7 +203,7 @@ kthread_reap(struct kthread *leaving)
 
 /*
  * Explicit run queue of TCBs.  The scheduler only ever looks at this queue;
- * a struct proc is a resource container, never a scheduling entity.  A thread
+ * a struct process is a resource container, never a scheduling entity.  A thread
  * is enqueued when it becomes runnable and dequeued when it blocks/exits.
  */
 static struct kthread *rq_head, *rq_tail;
@@ -463,7 +463,7 @@ kthread_spawn(const char *name, void (*entry)(void *), void *arg)
 /* 中文：为一个用户进程创建用户线程槽位，分配独立内核栈并绑定进程与 tid */
 /* EN: Create a user-thread slot for a process, allocating a private kernel stack and binding proc/tid */
 struct kthread *
-kthread_user_spawn(struct proc *p, int tid)
+kthread_user_spawn(struct process *p, int tid)
 {
 	struct kthread *t;
 	int i;
@@ -651,7 +651,7 @@ kthread_runnable(void)
 /*
  * Pick the runnable TCB at the head of the run queue and switch to it.
  * This is the kernel-thread half of the unified scheduler: the run queue
- * holds TCBs, never struct proc.  Affinity is honoured by re-enqueuing a
+ * holds TCBs, never struct process.  Affinity is honoured by re-enqueuing a
  * woken thread on the CPU it last ran on (t_lastcpu) when SMP arrives.
  */
 void

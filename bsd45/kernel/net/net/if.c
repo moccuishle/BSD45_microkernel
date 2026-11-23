@@ -36,7 +36,7 @@
 #include <sys/param.h>
 #include <sys/mbuf.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/protosw.h>
@@ -490,7 +490,7 @@ ifioctl(so, cmd, data, p)
 	struct socket *so;
 	u_long cmd;
 	caddr_t data;
-	struct proc *p;
+	struct process *p;
 {
 	register struct ifnet *ifp;
 	register struct ifreq *ifr;

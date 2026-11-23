@@ -41,7 +41,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/ioctl.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/tty.h>
 #include <sys/termios.h>
 #include <sys/file.h>

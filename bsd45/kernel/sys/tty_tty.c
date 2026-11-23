@@ -40,7 +40,7 @@
 #include <sys/systm.h>
 #include <sys/conf.h>
 #include <sys/ioctl.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/tty.h>
 #include <sys/vnode.h>
 #include <sys/file.h>
@@ -53,7 +53,7 @@
 cttyopen(dev, flag, mode, p)
 	dev_t dev;
 	int flag, mode;
-	struct proc *p;
+	struct process *p;
 {
 	struct vnode *ttyvp = cttyvp(p);
 	int error;
@@ -87,7 +87,7 @@ cttyread(dev, uio, flag)
 	struct uio *uio;
 	int flag;
 {
-	struct proc *p = uio->uio_procp;
+	struct process *p = uio->uio_procp;
 	register struct vnode *ttyvp = cttyvp(p);
 	int error;
 
@@ -107,7 +107,7 @@ cttywrite(dev, uio, flag)
 	struct uio *uio;
 	int flag;
 {
-	struct proc *p = uio->uio_procp;
+	struct process *p = uio->uio_procp;
 	struct vnode *ttyvp = cttyvp(uio->uio_procp);
 	int error;
 
@@ -127,7 +127,7 @@ cttyioctl(dev, cmd, addr, flag, p)
 	u_long cmd;
 	caddr_t addr;
 	int flag;
-	struct proc *p;
+	struct process *p;
 {
 	struct vnode *ttyvp = cttyvp(p);
 
@@ -149,7 +149,7 @@ cttyioctl(dev, cmd, addr, flag, p)
 cttyselect(dev, flag, p)
 	dev_t dev;
 	int flag;
-	struct proc *p;
+	struct process *p;
 {
 	struct vnode *ttyvp = cttyvp(p);
 

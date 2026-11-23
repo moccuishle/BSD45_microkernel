@@ -45,7 +45,7 @@
 #include <sys/kernel.h>
 #include <sys/systm.h>
 #include <sys/resourcevar.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/mount.h>
 #include <sys/buf.h>
 #include <sys/malloc.h>
@@ -247,7 +247,7 @@ int nfs_commit();
 extern u_long nfs_true, nfs_false;
 extern struct nfsstats nfsstats;
 extern nfstype nfsv3_type[9];
-struct proc *nfs_iodwant[NFS_MAXASYNCDAEMON];
+struct process *nfs_iodwant[NFS_MAXASYNCDAEMON];
 int nfs_numasync = 0;
 #define	DIRHDSIZ	(sizeof (struct dirent) - (MAXNAMLEN + 1))
 
@@ -260,7 +260,7 @@ int
 nfs_null(vp, cred, procp)
 	struct vnode *vp;
 	struct ucred *cred;
-	struct proc *procp;
+	struct process *procp;
 {
 	caddr_t bpos, dpos;
 	int error = 0;
@@ -286,7 +286,7 @@ nfs_access(ap)
 		struct vnode *a_vp;
 		int  a_mode;
 		struct ucred *a_cred;
-		struct proc *a_p;
+		struct process *a_p;
 	} */ *ap;
 {
 	register struct vnode *vp = ap->a_vp;
@@ -375,7 +375,7 @@ nfs_open(ap)
 		struct vnode *a_vp;
 		int  a_mode;
 		struct ucred *a_cred;
-		struct proc *a_p;
+		struct process *a_p;
 	} */ *ap;
 {
 	register struct vnode *vp = ap->a_vp;
@@ -481,7 +481,7 @@ nfs_close(ap)
 		struct vnode *a_vp;
 		int  a_fflag;
 		struct ucred *a_cred;
-		struct proc *a_p;
+		struct process *a_p;
 	} */ *ap;
 {
 	register struct vnode *vp = ap->a_vp;
@@ -516,7 +516,7 @@ nfs_getattr(ap)
 		struct vnode *a_vp;
 		struct vattr *a_vap;
 		struct ucred *a_cred;
-		struct proc *a_p;
+		struct process *a_p;
 	} */ *ap;
 {
 	register struct vnode *vp = ap->a_vp;
@@ -561,7 +561,7 @@ nfs_setattr(ap)
 		struct vnode *a_vp;
 		struct vattr *a_vap;
 		struct ucred *a_cred;
-		struct proc *a_p;
+		struct process *a_p;
 	} */ *ap;
 {
 	register struct vnode *vp = ap->a_vp;
@@ -642,7 +642,7 @@ nfs_setattrrpc(vp, vap, cred, procp)
 	register struct vnode *vp;
 	register struct vattr *vap;
 	struct ucred *cred;
-	struct proc *procp;
+	struct process *procp;
 {
 	register struct nfsv2_sattr *sp;
 	register caddr_t cp;
@@ -765,7 +765,7 @@ nfs_lookup(ap)
 	register struct vnode *dvp = ap->a_dvp;
 	register struct vnode **vpp = ap->a_vpp;
 	register int flags = cnp->cn_flags;
-	register struct proc *p = cnp->cn_proc;
+	register struct process *p = cnp->cn_proc;
 	register struct vnode *newvp;
 	register u_long *tl;
 	register caddr_t cp;
@@ -1477,7 +1477,7 @@ nfs_removeit(sp)
 {
 
 	return (nfs_removerpc(sp->s_dvp, sp->s_name, sp->s_namlen, sp->s_cred,
-		(struct proc *)0));
+		(struct process *)0));
 }
 
 /*
@@ -1491,7 +1491,7 @@ nfs_removerpc(dvp, name, namelen, cred, proc)
 	char *name;
 	int namelen;
 	struct ucred *cred;
-	struct proc *proc;
+	struct process *proc;
 {
 	register u_long *tl;
 	register caddr_t cp;
@@ -1617,7 +1617,7 @@ nfs_renamerpc(fdvp, fnameptr, fnamelen, tdvp, tnameptr, tnamelen, cred, proc)
 	char *tnameptr;
 	int tnamelen;
 	struct ucred *cred;
-	struct proc *proc;
+	struct process *proc;
 {
 	register u_long *tl;
 	register caddr_t cp;
@@ -2483,7 +2483,7 @@ nfs_lookitup(dvp, name, len, cred, procp, npp)
 	char *name;
 	int len;
 	struct ucred *cred;
-	struct proc *procp;
+	struct process *procp;
 	struct nfsnode **npp;
 {
 	register u_long *tl;
@@ -2558,7 +2558,7 @@ nfs_commit(vp, offset, cnt, cred, procp)
 	u_quad_t offset;
 	int cnt;
 	struct ucred *cred;
-	struct proc *procp;
+	struct process *procp;
 {
 	register caddr_t cp;
 	register u_long *tl;
@@ -2636,13 +2636,13 @@ nfs_strategy(ap)
 {
 	register struct buf *bp = ap->a_bp;
 	struct ucred *cr;
-	struct proc *p;
+	struct process *p;
 	int error = 0;
 
 	if (bp->b_flags & B_PHYS)
 		panic("nfs physio");
 	if (bp->b_flags & B_ASYNC)
-		p = (struct proc *)0;
+		p = (struct process *)0;
 	else
 		p = curproc;	/* XXX */
 	if (bp->b_flags & B_READ)
@@ -2674,7 +2674,7 @@ nfs_mmap(ap)
 		struct vnode *a_vp;
 		int  a_fflags;
 		struct ucred *a_cred;
-		struct proc *a_p;
+		struct process *a_p;
 	} */ *ap;
 {
 
@@ -2694,7 +2694,7 @@ nfs_fsync(ap)
 		struct vnode * a_vp;
 		struct ucred * a_cred;
 		int  a_waitfor;
-		struct proc * a_p;
+		struct process * a_p;
 	} */ *ap;
 {
 
@@ -2713,7 +2713,7 @@ nfs_flush(vp, cred, waitfor, p, commit)
 	register struct vnode *vp;
 	struct ucred *cred;
 	int waitfor;
-	struct proc *p;
+	struct process *p;
 	int commit;
 {
 	register struct nfsnode *np = VTONFS(vp);
@@ -3000,7 +3000,7 @@ nfs_truncate(ap)
 		off_t a_length;
 		int a_flags;
 		struct ucred *a_cred;
-		struct proc *a_p;
+		struct process *a_p;
 	} */ *ap;
 {
 
@@ -3056,7 +3056,7 @@ nfs_writebp(bp, force)
 	int force;
 {
 	register int oldflags = bp->b_flags, retv = 1;
-	register struct proc *p = curproc;	/* XXX */
+	register struct process *p = curproc;	/* XXX */
 	off_t off;
 
 	if(!(bp->b_flags & B_BUSY))
@@ -3124,7 +3124,7 @@ nfsspec_access(ap)
 		struct vnode *a_vp;
 		int  a_mode;
 		struct ucred *a_cred;
-		struct proc *a_p;
+		struct process *a_p;
 	} */ *ap;
 {
 	register struct vattr *vap;
@@ -3239,7 +3239,7 @@ nfsspec_close(ap)
 		struct vnode *a_vp;
 		int  a_fflag;
 		struct ucred *a_cred;
-		struct proc *a_p;
+		struct process *a_p;
 	} */ *ap;
 {
 	register struct vnode *vp = ap->a_vp;
@@ -3326,7 +3326,7 @@ nfsfifo_close(ap)
 		struct vnode *a_vp;
 		int  a_fflag;
 		struct ucred *a_cred;
-		struct proc *a_p;
+		struct process *a_p;
 	} */ *ap;
 {
 	register struct vnode *vp = ap->a_vp;

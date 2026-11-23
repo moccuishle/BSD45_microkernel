@@ -40,7 +40,7 @@
 #include <sys/conf.h>
 #include <sys/ioctl.h>
 #include <sys/signal.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/namei.h>
 #include <sys/vnode.h>
 #include <sys/kernel.h>
@@ -67,7 +67,7 @@
 
 struct nfsstats nfsstats;
 static int nfs_sysctl(int *, u_int, void *, size_t *, void *, size_t,
-		      struct proc *);
+		      struct process *);
 extern int nfs_ticks;
 
 /*
@@ -99,9 +99,9 @@ int nfs_diskless_valid = 0;
 void nfs_disconnect __P((struct nfsmount *));
 void nfsargs_ntoh __P((struct nfs_args *));
 int nfs_fsinfo __P((struct nfsmount *, struct vnode *, struct ucred *, 
-	struct proc *));
+	struct process *));
 static int nfs_mountdiskless __P((char *, char *, int, struct sockaddr_in *,
-	struct nfs_args *, struct proc *, struct vnode **, struct mount **));
+	struct nfs_args *, struct process *, struct vnode **, struct mount **));
 
 /*
  * nfs statfs call
@@ -112,7 +112,7 @@ int
 nfs_statfs(mp, sbp, p)
 	struct mount *mp;
 	register struct statfs *sbp;
-	struct proc *p;
+	struct process *p;
 {
 	register struct vnode *vp;
 	register struct nfs_statfs *sfp;
@@ -187,7 +187,7 @@ nfs_fsinfo(nmp, vp, cred, p)
 	register struct nfsmount *nmp;
 	register struct vnode *vp;
 	struct ucred *cred;
-	struct proc *p;
+	struct process *p;
 {
 	register struct nfsv3_fsinfo *fsp;
 	register caddr_t cp;
@@ -261,7 +261,7 @@ nfs_mountroot()
 	struct nfs_diskless *nd = &nfs_diskless;
 	struct socket *so;
 	struct vnode *vp;
-	struct proc *p = curproc;		/* XXX */
+	struct process *p = curproc;		/* XXX */
 	int error, i;
 	u_long l;
 	char buf[128];
@@ -438,7 +438,7 @@ nfs_mountdiskless(path, which, mountflag, sin, args, p, vpp, mpp)
 	int mountflag;
 	struct sockaddr_in *sin;
 	struct nfs_args *args;
-	struct proc *p;
+	struct process *p;
 	struct vnode **vpp;
 	struct mount **mpp;
 {
@@ -484,7 +484,7 @@ nfs_mount(mp, path, data, ndp, p)
 	char *path;
 	caddr_t data;
 	struct nameidata *ndp;
-	struct proc *p;
+	struct process *p;
 {
 	int error;
 	struct nfs_args args;
@@ -693,7 +693,7 @@ int
 nfs_unmount(mp, mntflags, p)
 	struct mount *mp;
 	int mntflags;
-	struct proc *p;
+	struct process *p;
 {
 	register struct nfsmount *nmp;
 	struct nfsnode *np;
@@ -799,7 +799,7 @@ nfs_sync(mp, waitfor, cred, p)
 	struct mount *mp;
 	int waitfor;
 	struct ucred *cred;
-	struct proc *p;
+	struct process *p;
 {
 	register struct vnode *vp;
 	int error, allerror = 0;
@@ -890,7 +890,7 @@ int
 nfs_start(mp, flags, p)
 	struct mount *mp;
 	int flags;
-	struct proc *p;
+	struct process *p;
 {
 
 	return (0);
@@ -908,7 +908,7 @@ nfs_quotactl(mp, cmd, uid, arg, p)
 	int cmd;
 	uid_t uid;
 	caddr_t arg;
-	struct proc *p;
+	struct process *p;
 {
 
 	return (EOPNOTSUPP);
@@ -921,7 +921,7 @@ nfs_quotactl(mp, cmd, uid, arg, p)
 /* 中文：实现 NFS_NFSSTATS 的 sysctl：无 oldp 时回填 sizeof nfsstats，缓冲区不足返回 ENOMEM，否则 copyout 统计并可用 newp 覆盖；其余名字返回 EOPNOTSUPP，namelen 大于 1 返回 ENOTDIR。 */
 static int
 nfs_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
-	   size_t newlen, struct proc *p)
+	   size_t newlen, struct process *p)
 {
 	int rv;
 

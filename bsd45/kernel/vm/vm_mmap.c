@@ -48,7 +48,7 @@
 #include <sys/systm.h>
 #include <sys/filedesc.h>
 #include <sys/resourcevar.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/vnode.h>
 #include <sys/file.h>
 #include <sys/mman.h>
@@ -75,7 +75,7 @@ int mmapdebug = 0;
 /* EN: Implement the sbrk system call: not implemented in this version, always returns EOPNOTSUPP */
 int
 sbrk(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct sbrk_args /* {
 		syscallarg(int) incr;
 	} */ *uap;
@@ -91,7 +91,7 @@ sbrk(p, uap, retval)
 /* EN: Implement the sstk system call: not implemented in this version, always returns EOPNOTSUPP */
 int
 sstk(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct sstk_args /* {
 		syscallarg(int) incr;
 	} */ *uap;
@@ -108,7 +108,7 @@ sstk(p, uap, retval)
 /* EN: Compatibility getpagesize system call for 4.3BSD/Sunos: return the system page size */
 int
 compat_43_getpagesize(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -123,7 +123,7 @@ compat_43_getpagesize(p, uap, retval)
 /* EN: Compatibility 4.3BSD mmap system call: translate the old argument structure into mmap_args and call the internal implementation */
 int
 compat_43_mmap(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_mmap_args /* {
 		syscallarg(caddr_t) addr;
 		syscallarg(int) len;
@@ -185,7 +185,7 @@ compat_43_mmap(p, uap, retval)
 /* EN: Implement the mmap system call: validate arguments and file descriptor, create a file or anonymous mapping in the process address space and return the mapped address */
 int
 mmap(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct mmap_args /* {
 		syscallarg(caddr_t) addr;
 		syscallarg(size_t) len;
@@ -318,7 +318,7 @@ mmap(p, uap, retval)
 /* EN: Implement the msync system call: write back changes in the given address range to the file and optionally invalidate caches */
 int
 msync(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct msync_args /* {
 		syscallarg(caddr_t) addr;
 		syscallarg(int) len;
@@ -398,7 +398,7 @@ msync(p, uap, retval)
 /* EN: Implement the munmap system call: unmap the given address range from the process address space */
 int
 munmap(p, uap, retval)
-	register struct proc *p;
+	register struct process *p;
 	register struct munmap_args /* {
 		syscallarg(caddr_t) addr;
 		syscallarg(int) len;
@@ -449,7 +449,7 @@ munmap(p, uap, retval)
 /* EN: Clear the UF_MAPPED mapping flag on file descriptor fd */
 void
 munmapfd(p, fd)
-	struct proc *p;
+	struct process *p;
 	int fd;
 {
 #ifdef DEBUG
@@ -467,7 +467,7 @@ munmapfd(p, fd)
 /* EN: Implement the mprotect system call: change the page protection of the given address range */
 int
 mprotect(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct mprotect_args /* {
 		syscallarg(caddr_t) addr;
 		syscallarg(int) len;
@@ -506,7 +506,7 @@ mprotect(p, uap, retval)
 /* EN: Implement the madvise system call: not implemented in this version, always returns EOPNOTSUPP */
 int
 madvise(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct madvise_args /* {
 		syscallarg(caddr_t) addr;
 		syscallarg(int) len;
@@ -524,7 +524,7 @@ madvise(p, uap, retval)
 /* EN: Implement the mincore system call: not implemented in this version, always returns EOPNOTSUPP */
 int
 mincore(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct mincore_args /* {
 		syscallarg(caddr_t) addr;
 		syscallarg(int) len;
@@ -541,7 +541,7 @@ mincore(p, uap, retval)
 /* EN: Implement the mlock system call: wire the pages in the given address range into memory so they cannot be paged out */
 int
 mlock(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct mlock_args /* {
 		syscallarg(caddr_t) addr;
 		syscallarg(size_t) len;
@@ -581,7 +581,7 @@ mlock(p, uap, retval)
 /* EN: Implement the munlock system call: unwire pages previously locked by mlock in the given address range */
 int
 munlock(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct munlock_args /* {
 		syscallarg(caddr_t) addr;
 		syscallarg(size_t) len;

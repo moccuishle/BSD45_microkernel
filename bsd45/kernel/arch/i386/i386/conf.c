@@ -48,13 +48,13 @@
 int	rawread		__P((dev_t, struct uio *, int));
 int	rawwrite	__P((dev_t, struct uio *, int));
 int	swstrategy	__P((struct buf *));
-int	ttselect	__P((dev_t, int, struct proc *));
+int	ttselect	__P((dev_t, int, struct process *));
 
-#define	dev_type_open(n)	int n __P((dev_t, int, int, struct proc *))
-#define	dev_type_close(n)	int n __P((dev_t, int, int, struct proc *))
+#define	dev_type_open(n)	int n __P((dev_t, int, int, struct process *))
+#define	dev_type_close(n)	int n __P((dev_t, int, int, struct process *))
 #define	dev_type_strategy(n)	int n __P((struct buf *))
 #define	dev_type_ioctl(n) \
-	int n __P((dev_t, int, caddr_t, int, struct proc *))
+	int n __P((dev_t, int, caddr_t, int, struct process *))
 
 /* bdevsw-specific types */
 #define	dev_type_dump(n)	int n __P((dev_t))
@@ -117,7 +117,7 @@ int	nblkdev = sizeof (bdevsw) / sizeof (bdevsw[0]);
 #define	dev_type_write(n)	int n __P((dev_t, struct uio *, int))
 #define	dev_type_stop(n)	int n __P((struct tty *, int))
 #define	dev_type_reset(n)	int n __P((int))
-#define	dev_type_select(n)	int n __P((dev_t, int, struct proc *))
+#define	dev_type_select(n)	int n __P((dev_t, int, struct process *))
 #define	dev_type_map(n)	int n __P(())
 
 #define	cdev_decl(n) \

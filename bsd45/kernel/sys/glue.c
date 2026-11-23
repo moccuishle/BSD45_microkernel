@@ -14,7 +14,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/types.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/user.h>
 #include <sys/reboot.h>
 
@@ -47,8 +47,8 @@ typedef __builtin_va_list	va_list;
 #define	va_arg(ap, type)	__builtin_va_arg(ap, type)
 #define	va_end(ap)		__builtin_va_end(ap)
 
-struct proc	proc0;
-struct proc	*curproc = &proc0;
+struct process	proc0;
+struct process	*curproc = &proc0;
 struct user	*proc0paddr;
 struct vmmeter	cnt;
 

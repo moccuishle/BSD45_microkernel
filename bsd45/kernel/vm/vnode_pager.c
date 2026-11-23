@@ -48,7 +48,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/malloc.h>
 #include <sys/vnode.h>
 #include <sys/uio.h>
@@ -126,7 +126,7 @@ vnode_pager_alloc(handle, size, prot, foff)
 	vm_object_t object;
 	struct vattr vattr;
 	struct vnode *vp;
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 
 #ifdef DEBUG
 	if (vpagerdebug & (VDB_FOLLOW|VDB_ALLOC))
@@ -209,7 +209,7 @@ vnode_pager_dealloc(pager)
 	register vn_pager_t vnp = (vn_pager_t)pager->pg_data;
 	register struct vnode *vp;
 #ifdef NOTDEF
-	struct proc *p = curproc;		/* XXX */
+	struct process *p = curproc;		/* XXX */
 #endif
 
 #ifdef DEBUG
@@ -289,7 +289,7 @@ vnode_pager_haspage(pager, offset)
 	vm_pager_t pager;
 	vm_offset_t offset;
 {
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 	vn_pager_t vnp = (vn_pager_t)pager->pg_data;
 	daddr_t bn;
 	int err;
@@ -441,7 +441,7 @@ void
 vnode_pager_umount(mp)
 	register struct mount *mp;
 {
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 	vm_pager_t pager, npager;
 	struct vnode *vp;
 
@@ -474,7 +474,7 @@ boolean_t
 vnode_pager_uncache(vp)
 	register struct vnode *vp;
 {
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 	vm_object_t object;
 	boolean_t uncached;
 	vm_pager_t pager;
@@ -521,7 +521,7 @@ vnode_pager_io(vnp, mlist, npages, sync, rw)
 	struct iovec aiov;
 	vm_offset_t kva, foff;
 	int error, size;
-	struct proc *p = curproc;		/* XXX */
+	struct process *p = curproc;		/* XXX */
 
 	/* XXX */
 	vm_page_t m;
@@ -572,7 +572,7 @@ vnode_pager_io(vnp, mlist, npages, sync, rw)
 	auio.uio_segflg = UIO_SYSSPACE;
 	auio.uio_rw = rw;
 	auio.uio_resid = size;
-	auio.uio_procp = (struct proc *)0;
+	auio.uio_procp = (struct process *)0;
 #ifdef DEBUG
 	if (vpagerdebug & VDB_IO)
 		printf("vnode_pager_io: vp %x kva %x foff %x size %x",

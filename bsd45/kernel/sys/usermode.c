@@ -17,7 +17,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/types.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/user.h>
 #include <sys/termios.h>
 #include <sys/ttycom.h>
@@ -214,7 +214,7 @@ static int	ps_snap_len;
 #define	MMAP_MAXLEN	0x400000	/* 4 MB per mapping */
 #define	NMAP		KPROC_NMAP
 
-/* struct kvma / struct kfd are defined in sys/kproc.h (via sys/proc.h). */
+/* struct kvma / struct kfd are defined in sys/kproc.h (via sys/kprocess.h). */
 
 /* saved user context (struct sysregs) is declared in sys/platform.h */
 
@@ -222,7 +222,7 @@ static int	ps_snap_len;
  * Process table capacity (S407).  The old limit of 24 was a *loader* limit:
  * .bss had to end below stage 2 at 0x90000 (INT 13h itself refuses to write
  * from 0xA0000 up, so the staged image is capped at 576 KB), and 24 x
- * sizeof(struct proc) fitted exactly.  Both constraints are gone:
+ * sizeof(struct process) fitted exactly.  Both constraints are gone:
  *
  *   - procs[] is no longer part of .bss: it lives in the PROC_TABLE_VA
  *     window, backed by pages taken from the bump allocator, so the table
@@ -235,7 +235,7 @@ static int	ps_snap_len;
  *     resolved to the Microsoft Store stub, inflating the image to 618 KB -
  *     more than the 576 KB the BIOS can stage).
  *
- * NPROC x sizeof(struct proc) = 1024 x 1808 = 1.77 MB of kernel VA (not image).
+ * NPROC x sizeof(struct process) = 1024 x 1808 = 1.77 MB of kernel VA (not image).
  * Two ceilings remain: the slot table (fork returns -EAGAIN when it is full)
  * and physical memory (page_alloc() panics - there is no swapper to page
  * out to, so running out of RAM is a kernel bug, not a per-process error;
@@ -310,7 +310,7 @@ static int	ps_snap_len;
 
 #define	SIG_TO_MASK(s)	(1u << (s))
 
-/* struct proc (sys/proc.h) is the authoritative kernel process object;
+/* struct process (sys/kprocess.h) is the authoritative kernel process object;
  * its tail carries the process runtime state (uk_ prefix). */
 
 /*
@@ -342,7 +342,7 @@ static int	ps_snap_len;
  * 这些窗口的页表都会拷进每个用户页目录（见 user_pd_create）。
  */
 #define	PROC_TABLE_VA	0xFB000000
-static struct proc	*procs;
+static struct process	*procs;
 /* S413: serialises slot allocation in the shared process table. */
 static struct spinlock	proc_table_lock;
 
@@ -362,7 +362,7 @@ static struct spinlock	proc_table_lock;
  * 自己那份。sc_idle 是 AP 跑调度循环用的载体，不在 TCB 池里，别的核选不中。
  */
 struct sched_cpu {
-	struct proc	*sc_cur;	/* current process on this CPU */
+	struct process	*sc_cur;	/* current process on this CPU */
 	struct kthread	*sc_curthread;	/* current execution flow */
 	unsigned	sc_cur_pd;	/* page directory currently in CR3 */
 	int		sc_need_resched;/* safe-point reschedule request */
@@ -393,7 +393,7 @@ static unsigned	mmap_limit = USER_HEAP_START + (80u * 1024u * 1024u);
 static void	user_layout_init(void);
 /* KVFS: forward declaration of the in-flight forwarding waiter (defined in
  * the KVFS section below) so port-release fault isolation can reach it. */
-static struct proc *kvfs_waiter;
+static struct process *kvfs_waiter;
 
 /* EN: Accessor for the current user thread's TCB (used by preemption core). */
 struct kthread *
@@ -449,7 +449,7 @@ kthread_block_tcb(void *wchan)
 
 /* EN: Wake a process and restore its blocked TCB(s) to runnable. */
 static void
-proc_wake(struct proc *p)
+proc_wake(struct process *p)
 {
 	struct kthread *t;
 	int i;
@@ -482,7 +482,7 @@ proc_wake(struct proc *p)
  * resume_user() treats a pd of 0 as "keep current CR3".
  */
 static unsigned
-switch_pd_for(struct proc *p)
+switch_pd_for(struct process *p)
 {
 	unsigned live_pd = hal_address_space_current();
 
@@ -596,7 +596,7 @@ kern_table_alloc(unsigned va, unsigned size)
 	return ((void *)va);
 }
 
-static void sig_deliver(struct proc *, struct sysregs *);
+static void sig_deliver(struct process *, struct sysregs *);
 static int console_fg_pgrp;
 
 static unsigned page_free_list;
@@ -1201,7 +1201,7 @@ user_getpa(unsigned pdpa, unsigned va)
 /* 中文：为进程 p 分配一个空闲的 VMA 槽位，用完返回 0 */
 /* EN: Allocate a free VMA slot for process p, returning 0 when none is available */
 static struct kvma *
-vma_alloc(struct proc *p)
+vma_alloc(struct process *p)
 {
 	int i;
 
@@ -1214,7 +1214,7 @@ vma_alloc(struct proc *p)
 /* 中文：查找包含地址 addr 的 VMA 槽位，找到返回指针，否则返回 0 */
 /* EN: Find the VMA slot containing address addr, returning its pointer or 0 if none */
 static struct kvma *
-vma_find(struct proc *p, unsigned addr)
+vma_find(struct process *p, unsigned addr)
 {
 	int i;
 
@@ -1228,7 +1228,7 @@ vma_find(struct proc *p, unsigned addr)
 /* 中文：检查 [start, start+len) 是否与进程 p 的任何已有 VMA 区间重叠 */
 /* EN: Check whether [start, start+len) overlaps any existing VMA of process p */
 static int
-vma_overlaps(struct proc *p, unsigned start, unsigned len)
+vma_overlaps(struct process *p, unsigned start, unsigned len)
 {
 	int i;
 
@@ -1421,7 +1421,7 @@ struct aio_slot {
 	unsigned a_user_data;	/* ring CQE payload */
 	void		*a_ring;	/* struct uring_ring * when from a ring */
 	unsigned char	*a_kbuf;
-	struct proc	*a_proc;
+	struct process	*a_proc;
 	struct kiocb	 a_ki;
 };
 
@@ -1431,7 +1431,7 @@ struct aio_slot {
 
 struct uring_ring {
 	int		 r_used;
-	struct proc	*r_proc;
+	struct process	*r_proc;
 	unsigned	 r_pd;
 	unsigned	 r_uva;
 	unsigned	 r_pa;
@@ -1482,7 +1482,7 @@ static void
 aio_complete_kiocb(struct kiocb *ki, int r)
 {
 	struct aio_slot *s = (struct aio_slot *)ki->ki_private;
-	struct proc *save = cur;
+	struct process *save = cur;
 	unsigned savepd = hal_address_space_current();
 
 	if (s == 0)
@@ -1516,7 +1516,7 @@ static void
 aio_soft(void *arg)
 {
 	struct aio_slot *s = (struct aio_slot *)arg;
-	struct proc *p = 0;
+	struct process *p = 0;
 	int i;
 
 	if (s == 0 || s->a_woken)
@@ -1685,7 +1685,7 @@ uring_cqe_push(struct uring_ring *rg, unsigned user_data, int result)
 static void
 uring_wake(struct uring_ring *rg)
 {
-	struct proc *p = 0;
+	struct process *p = 0;
 	int i;
 
 	if (rg->r_wait_pid == 0)
@@ -1987,7 +1987,7 @@ do_msync(unsigned addr, unsigned len)
 /* 中文：地址空间销毁前清理所有映射：共享页解除映射并释放页缓存引用，私有页留给 free_address_space 处理 */
 /* EN: Drop all mappings before the address space goes away: unmap shared pages and drop cache references, leaving private pages to free_address_space */
 static void
-mmap_teardown(struct proc *p)
+mmap_teardown(struct process *p)
 {
 	int i;
 	unsigned k;
@@ -2440,7 +2440,7 @@ fd_alloc_tmpdir(void)
 
 /* ---------------------------------------------------------------- pipes */
 
-static struct proc *proc_find(int pid);
+static struct process *proc_find(int pid);
 static void proc_sched(void);
 
 #define	NPIPE	8
@@ -2508,7 +2508,7 @@ pipe_copy(unsigned pd, unsigned va, const void *kbuf, unsigned n, int touser)
 static int
 ipc_deliver_waiter(unsigned port, const struct ipc_msg *m)
 {
-	struct proc *p;
+	struct process *p;
 	int i;
 
 	for (i = 0; i < NPROC; i++) {
@@ -2536,14 +2536,14 @@ ipc_deliver_waiter(unsigned port, const struct ipc_msg *m)
 void
 ipc_fail_waiters(unsigned port)
 {
-	struct proc *p;
+	struct process *p;
 	int i;
 
 	/* KVFS: 服务退出时，给在途内核转发事务返回 -EIO，实现故障隔离。
 	 * KVFS: on service exit, fail the in-flight kernel forward with -EIO. */
 	if (port == SRV_PORT_KERNEL && kvfs_waiter != 0 &&
 	    kvfs_waiter->uk_state == P_BLOCKED && kvfs_waiter->uk_kvfs_waiting) {
-		struct proc *kw = kvfs_waiter;
+		struct process *kw = kvfs_waiter;
 
 		kw->uk_regs.eax = (unsigned)-EIO;
 		kw->uk_kvfs_waiting = 0;
@@ -2585,7 +2585,7 @@ ipc_fail_waiters(unsigned port)
  * the virtual fd or a negative errno.  Virtual fds start at KVFS_FD_BASE.
  */
 static int
-kvfs_fd_alloc(struct proc *p, unsigned handle)
+kvfs_fd_alloc(struct process *p, unsigned handle)
 {
 	int i;
 
@@ -2602,7 +2602,7 @@ kvfs_fd_alloc(struct proc *p, unsigned handle)
  * EN: virtual fd -> handle (slot index); -1 if not a KVFS fd.
  */
 static int
-kvfs_fd_handle(struct proc *p, int fd)
+kvfs_fd_handle(struct process *p, int fd)
 {
 	int slot = fd - KVFS_FD_BASE;
 
@@ -2623,7 +2623,7 @@ kvfs_fd_handle(struct proc *p, int fd)
 static int
 kvfs_reply_deliver(unsigned port, const struct ipc_msg *m)
 {
-	struct proc *p = kvfs_waiter;
+	struct process *p = kvfs_waiter;
 	struct srv_args_kernel *wa;
 	int result, data_len;
 
@@ -2689,7 +2689,7 @@ kvfs_forward(struct sysregs *r, unsigned op, unsigned handle,
 {
 	struct ipc_msg m;
 	struct srv_args_kernel *a = (struct srv_args_kernel *)m.inline_data;
-	struct proc *p = cur;
+	struct process *p = cur;
 	int n;
 
 	if (kvfs_waiter != 0)
@@ -2747,7 +2747,7 @@ registered:
 static void
 pipe_wake_reader(struct pipe *pp, int eof)
 {
-	struct proc *p;
+	struct process *p;
 	unsigned n, first;
 
 	if (pp->rpid == 0)
@@ -2781,7 +2781,7 @@ pipe_wake_reader(struct pipe *pp, int eof)
 static void
 pipe_wake_writer(struct pipe *pp, int epipe)
 {
-	struct proc *p;
+	struct process *p;
 	unsigned space, n, first;
 
 	if (pp->wpid == 0)
@@ -3076,7 +3076,7 @@ cow_print(void)
 /* 中文：为进程 p 生成用户态内核执行载体线程（主线程），初始化线程与线程链表指针 */
 /* EN: Spawn the main user-mode kernel thread for process p and initialize its thread list pointers */
 static struct kthread *
-proc_add_thread(struct proc *p, int tid)
+proc_add_thread(struct process *p, int tid)
 {
 	struct kthread *t;
 
@@ -3134,13 +3134,13 @@ proc_table_init(void)
 
 	user_layout_init();
 	spin_init(&proc_table_lock);
-	procs = (struct proc *)kern_table_alloc((unsigned)PROC_TABLE_VA,
-	    (unsigned)NPROC * (unsigned)sizeof(struct proc));
+	procs = (struct process *)kern_table_alloc((unsigned)PROC_TABLE_VA,
+	    (unsigned)NPROC * (unsigned)sizeof(struct process));
 	printf("usermode: %d proc slots at %x (%d KB)\n", NPROC,
-	    PROC_TABLE_VA, (NPROC * sizeof(struct proc)) / 1024);
+	    PROC_TABLE_VA, (NPROC * sizeof(struct process)) / 1024);
 }
 
-static struct proc *
+static struct process *
 proc_alloc(void)
 {
 	int i;
@@ -3186,7 +3186,7 @@ proc_alloc(void)
 /* 中文：记录进程的可执行文件基名到 p_comm（用于 /dev/ps），内核不保留 argv */
 /* EN: Record the executable basename of a path into p_comm for /dev/ps; the kernel does not keep argv */
 static void
-proc_setcomm(struct proc *p, const char *path)
+proc_setcomm(struct process *p, const char *path)
 {
 	const char *base, *s;
 	int i;
@@ -3202,7 +3202,7 @@ proc_setcomm(struct proc *p, const char *path)
 
 /* 中文：按 pid 查找进程：找到返回进程指针，否则 0 */
 /* EN: Find a process by pid, returning its pointer or 0 */
-static struct proc *
+static struct process *
 proc_find(int pid)
 {
 	int i;
@@ -3221,7 +3221,7 @@ proc_find(int pid)
 unsigned
 proc_pd_by_pid(unsigned pid)
 {
-	struct proc *p = proc_find((int)pid);
+	struct process *p = proc_find((int)pid);
 
 	return (p != 0 ? p->uk_pd : 0);
 }
@@ -3305,7 +3305,7 @@ ap_sched(void)
 static void
 proc_sched(void)
 {
-	struct proc *me = cur;
+	struct process *me = cur;
 	struct kthread *mt;
 	int cid = cpu_id();
 	int i;
@@ -3389,7 +3389,7 @@ proc_sched(void)
 		 */
 		for (i = 0; i < nkthread; i++) {
 			struct kthread *t = &kthreads[i];
-			struct proc *p;
+			struct process *p;
 			struct sysregs *regs;
 			int main_thread;
 
@@ -3715,7 +3715,7 @@ estcpu_decay_all(void)
 	int i, L2 = 2 * estcpu_loadavg();	/* 2 * loadavg */
 
 	for (i = 0; i < NPROC; i++) {
-		struct proc *p = &procs[i];
+		struct process *p = &procs[i];
 
 		if (p->uk_state == P_FREE)
 			continue;
@@ -3731,7 +3731,7 @@ estcpu_decay_all(void)
 static int
 tcb_runnable(struct kthread *t)
 {
-	struct proc *p;
+	struct process *p;
 
 	if (t == 0 || !t->t_used || t->t_proc == 0 || t->t_state != KT_RUN)
 		return (0);
@@ -3748,13 +3748,13 @@ tcb_runnable(struct kthread *t)
  * EN: BSD-style interaction penalty from the owning process: a high estcpu
  * (CPU-bound) or a high p_nice (voluntary yield) lowers the thread's
  * effective priority; interactive (low estcpu) tasks stay high.  Lives in
- * the process layer because estcpu is on struct proc; kthread.c calls it
+ * the process layer because estcpu is on struct process; kthread.c calls it
  * through sched_interaction_penalty().
  */
 int
 sched_interaction_penalty(struct kthread *t)
 {
-	struct proc *p;
+	struct process *p;
 	int penalty;
 
 	if (t == 0 || (p = t->t_proc) == 0)
@@ -3849,10 +3849,10 @@ void
 sched_tick(struct sysregs *r)
 {
 	struct kthread *me = cur_thread;
-	struct proc *mp = cur;
+	struct process *mp = cur;
 	struct kthread *t;
 	struct sysregs *regs;
-	struct proc *p;
+	struct process *p;
 	int main_thread;
 
 	if (cur == 0 || me == 0 || r == 0)
@@ -3967,7 +3967,7 @@ sched_tick(struct sysregs *r)
 static int
 do_fork(struct sysregs *r)
 {
-	struct proc *p;
+	struct process *p;
 	unsigned pd;
 
 	if ((p = proc_alloc()) == 0)
@@ -4024,7 +4024,7 @@ do_fork(struct sysregs *r)
 static int
 do_vfork(struct sysregs *r)
 {
-	struct proc *p;
+	struct process *p;
 	unsigned pd;
 
 	if ((p = proc_alloc()) == 0)
@@ -4073,7 +4073,7 @@ do_vfork(struct sysregs *r)
 static void
 proc_exit(int code)
 {
-	struct proc *p;
+	struct process *p;
 	int i, reaped = 0;
 
 	for (i = 0; i < NPROC; i++) {
@@ -4217,7 +4217,7 @@ sig_default(int sig)
 /* 中文：向进程 p 发送信号：SIGCONT 恢复停止进程，否则置挂起位；阻塞进程被置可运行并收到 -EINTR */
 /* EN: Send a signal to process p: SIGCONT resumes a stopped process, else set the pending bit; a blocked process becomes runnable with -EINTR */
 static void
-sig_send(struct proc *p, int sig)
+sig_send(struct process *p, int sig)
 {
 
 	if (p == 0 || p->uk_state == P_FREE || sig <= 0 || sig >= NSIG)
@@ -4255,7 +4255,7 @@ sig_send_pgrp(int pgrp, int sig)
 static void
 sig_send_pid(int pid, int sig)
 {
-	struct proc *p = proc_find(pid);
+	struct process *p = proc_find(pid);
 
 	if (p != 0)
 		sig_send(p, sig);
@@ -4265,7 +4265,7 @@ sig_send_pid(int pid, int sig)
 /* 中文：在用户栈上压入 sigframe 与返回跳板（sigreturn 系统调用），把上下文改为信号处理入口；栈无效返回 -1 */
 /* EN: Push a sigframe and sigreturn trampoline on the user stack and redirect context to the handler; returns -1 for a bad stack */
 static int
-sig_setup(struct proc *p, struct sysregs *r, int sig)
+sig_setup(struct process *p, struct sysregs *r, int sig)
 {
 	static const unsigned char tramp[8] = {
 		0xb8, 0x67, 0x00, 0x00, 0x00,	/* movl $103,%eax	*/
@@ -4314,9 +4314,9 @@ sig_setup(struct proc *p, struct sysregs *r, int sig)
 /* 中文：停止进程：置 P_STOPPED 与停止信号，并唤醒带 WUNTRACED 等待的父进程写入停止状态 */
 /* EN: Stop a process: set P_STOPPED and the stop signal, then wake a WUNTRACED-waiting parent with the stop status */
 static void
-sig_stop(struct proc *p, int sig)
+sig_stop(struct process *p, int sig)
 {
-	struct proc *pp;
+	struct process *pp;
 
 	p->uk_state = P_STOPPED;
 	p->uk_p_stopsig = sig;
@@ -4340,7 +4340,7 @@ sig_stop(struct proc *p, int sig)
 /* 中文：返回用户态前投递至多一个信号：处理 SIGCONT/忽略/捕获/默认动作，默认终止则退出或置僵尸；调用前须已加载目标页目录 */
 /* EN: Deliver at most one pending signal before returning to user mode: handle SIGCONT/ignore/catch/default, terminating or zombifying as needed; caller must have the target PD loaded */
 static void
-sig_deliver(struct proc *p, struct sysregs *r)
+sig_deliver(struct process *p, struct sysregs *r)
 {
 	int sig;
 	unsigned pend, mask;
@@ -4398,7 +4398,7 @@ sig_deliver(struct proc *p, struct sysregs *r)
 static int
 do_wait4(int want, unsigned statusp, int options, struct sysregs *r)
 {
-	struct proc *p;
+	struct process *p;
 	int i, pid;
 
 	for (i = 0; i < NPROC; i++) {
@@ -4797,7 +4797,7 @@ exec_image(const char *path, unsigned uargv, unsigned uenvp, struct sysregs *r)
 	r->uesp = esp;
 	r->eax = 0;
 	if (cur->uk_vfork_child) {
-		struct proc *pp = proc_find(cur->uk_ppid);
+		struct process *pp = proc_find(cur->uk_ppid);
 
 		cur->uk_vfork_child = 0;
 		if (pp != 0 && pp->uk_state == P_BLOCKED && pp->uk_vfork_wait) {
@@ -5651,7 +5651,7 @@ bsd45_syscall(struct sysregs *r)
 		r->eax = (unsigned)cur->p_pgrp;
 		break;
 	case 82: {			/* setpgid(pid, pgid) */
-		struct proc *p = (r->ebx == 0) ? cur :
+		struct process *p = (r->ebx == 0) ? cur :
 		    proc_find((int)r->ebx);
 
 		if (p == 0) {
@@ -5683,7 +5683,7 @@ bsd45_syscall(struct sysregs *r)
 			break;
 		}
 		for (i = 0; i < NPROC; i++) {
-			struct proc *p = &procs[i];
+			struct process *p = &procs[i];
 			int hit;
 
 			if (p->uk_state == P_FREE)
@@ -6683,7 +6683,7 @@ start_prog(const char *path, const char *script)
 
 
 	/* pid 1: the first user process, no parent */
-	bzero(procs, (unsigned)NPROC * (unsigned)sizeof(struct proc));
+	bzero(procs, (unsigned)NPROC * (unsigned)sizeof(struct process));
 	cur = &procs[0];
 	cur->uk_state = P_RUN;
 	cur->uk_pid = 1;

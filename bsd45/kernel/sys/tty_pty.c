@@ -42,7 +42,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/ioctl.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/tty.h>
 #include <sys/conf.h>
 #include <sys/file.h>
@@ -113,7 +113,7 @@ ptyattach(n)
 ptsopen(dev, flag, devtype, p)
 	dev_t dev;
 	int flag, devtype;
-	struct proc *p;
+	struct process *p;
 {
 	register struct tty *tp;
 	int error;
@@ -152,7 +152,7 @@ ptsopen(dev, flag, devtype, p)
 ptsclose(dev, flag, mode, p)
 	dev_t dev;
 	int flag, mode;
-	struct proc *p;
+	struct process *p;
 {
 	register struct tty *tp;
 	int err;
@@ -171,7 +171,7 @@ ptsread(dev, uio, flag)
 	struct uio *uio;
 	int flag;
 {
-	struct proc *p = curproc;
+	struct process *p = curproc;
 	register struct tty *tp = &pt_tty[minor(dev)];
 	register struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	int error = 0;
@@ -276,12 +276,12 @@ ptcwakeup(tp, flag)
 /* 中文：打开伪终端的主设备（master）侧。 */
 /* EN: Open the master side of a pseudo-terminal. */
 #ifdef __STDC__
-ptcopen(dev_t dev, int flag, int devtype, struct proc *p)
+ptcopen(dev_t dev, int flag, int devtype, struct process *p)
 #else
 ptcopen(dev, flag, devtype, p)
 	dev_t dev;
 	int flag, devtype;
-	struct proc *p;
+	struct process *p;
 #endif
 {
 	register struct tty *tp;
@@ -419,7 +419,7 @@ ptsstop(tp, flush)
 ptcselect(dev, rw, p)
 	dev_t dev;
 	int rw;
-	struct proc *p;
+	struct process *p;
 {
 	register struct tty *tp = &pt_tty[minor(dev)];
 	struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
@@ -567,7 +567,7 @@ ptyioctl(dev, cmd, data, flag, p)
 	u_long cmd;
 	caddr_t data;
 	int flag;
-	struct proc *p;
+	struct process *p;
 {
 	register struct tty *tp = &pt_tty[minor(dev)];
 	register struct pt_ioctl *pti = &pt_ioctl[minor(dev)];

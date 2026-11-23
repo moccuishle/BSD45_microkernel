@@ -99,15 +99,15 @@ int	nfs_mount __P((
 		char *path,
 		caddr_t data,
 		struct nameidata *ndp,
-		struct proc *p));
+		struct process *p));
 int	nfs_start __P((
 		struct mount *mp,
 		int flags,
-		struct proc *p));
+		struct process *p));
 int	nfs_unmount __P((
 		struct mount *mp,
 		int mntflags,
-		struct proc *p));
+		struct process *p));
 int	nfs_root __P((
 		struct mount *mp,
 		struct vnode **vpp));
@@ -116,16 +116,16 @@ int	nfs_quotactl __P((
 		int cmds,
 		uid_t uid,
 		caddr_t arg,
-		struct proc *p));
+		struct process *p));
 int	nfs_statfs __P((
 		struct mount *mp,
 		struct statfs *sbp,
-		struct proc *p));
+		struct process *p));
 int	nfs_sync __P((
 		struct mount *mp,
 		int waitfor,
 		struct ucred *cred,
-		struct proc *p));
+		struct process *p));
 int	nfs_fhtovp __P((
 		struct mount *mp,
 		struct fid *fhp,

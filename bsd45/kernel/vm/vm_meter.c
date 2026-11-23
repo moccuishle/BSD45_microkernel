@@ -34,7 +34,7 @@
  */
 
 #include <sys/param.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <vm/vm.h>
@@ -78,7 +78,7 @@ loadav(avg)
 	register struct loadavg *avg;
 {
 	register int i, nrun;
-	register struct proc *p;
+	register struct process *p;
 
 	for (nrun = 0, p = allproc.lh_first; p != 0; p = p->p_list.le_next) {
 		switch (p->p_stat) {
@@ -108,7 +108,7 @@ vm_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	size_t *oldlenp;
 	void *newp;
 	size_t newlen;
-	struct proc *p;
+	struct process *p;
 {
 	struct vmtotal vmtotals;
 
@@ -141,7 +141,7 @@ void
 vmtotal(totalp)
 	register struct vmtotal *totalp;
 {
-	register struct proc *p;
+	register struct process *p;
 	register vm_map_entry_t	entry;
 	register vm_object_t object;
 	register vm_map_t map;

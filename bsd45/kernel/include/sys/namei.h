@@ -49,7 +49,7 @@ struct nameidata {
 	enum	uio_seg ni_segflg;	/* location of pathname */
      /* u_long	ni_nameiop;		   namei operation */
      /* u_long	ni_flags;		   flags to namei */
-     /* struct	proc *ni_proc;		   process requesting lookup */
+     /* struct	process *ni_proc;		   process requesting lookup */
 	/*
 	 * Arguments to lookup.
 	 */
@@ -78,7 +78,7 @@ struct nameidata {
 		 */
 		u_long	cn_nameiop;	/* namei operation */
 		u_long	cn_flags;	/* flags to namei */
-		struct	proc *cn_proc;	/* process requesting lookup */
+		struct	process *cn_proc;	/* process requesting lookup */
 		struct	ucred *cn_cred;	/* credentials */
 		/*
 		 * Shared between lookup and commit routines.

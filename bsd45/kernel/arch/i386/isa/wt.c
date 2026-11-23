@@ -94,7 +94,7 @@
 #include <sys/param.h>
 #include <sys/buf.h>
 #include <sys/file.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/user.h>
 
 #include <i386/isa/wtreg.h>
@@ -218,13 +218,13 @@ numbytes	dw	0	; number of bytes to read or write (new)
 unsigned int	wtflags = TPSTART;	/* state of tape drive */
 
 struct	buf	rwtbuf;		/* header for raw i/o */
-struct  proc	*myproc;	/* process which opened tape driver */
+struct  process	*myproc;	/* process which opened tape driver */
 
 char wtimeron;			/* wtimer() active flag */
 char wtio;			/* dma (i/o) active flag */
 char isrlock;			/* isr() flag */
 
-struct proc * Hogproc;	/* no Hogproc on Microport */
+struct process * Hogproc;	/* no Hogproc on Microport */
 #define	ftoseg(x)	((unsigned) (x >> 16))
 
 struct	wtstatus {
@@ -319,7 +319,7 @@ register struct buf *bp;
 		bp->b_resid = bp->b_bcount;
 		goto xit;
 	}
-	if ((Hogproc == (struct proc *) 0) && TPHOG(bp->b_dev))
+	if ((Hogproc == (struct process *) 0) && TPHOG(bp->b_dev))
 	{
 #ifdef DEBUG
 		printf("setting Hogproc\n");
@@ -451,7 +451,7 @@ xit:
 	if (wtimeron)
 		Hogtime = lbolt;
 	else if (Hogproc == myproc)
-		Hogproc = (struct proc *) 0;
+		Hogproc = (struct process *) 0;
 }
 
 /*
@@ -471,7 +471,7 @@ wtimer()
 		isr();
 
 	if ((Hogproc == myproc) && Hogtime && (lbolt-Hogtime > HZ))
-		Hogproc = (struct proc *) 0;
+		Hogproc = (struct process *) 0;
 
 	if (wtio || (Hogproc == myproc))
 		timeout(wtimer, (caddr_t) 0, HZ);
@@ -642,7 +642,7 @@ wtclose(dev)
 	debug("WTclose:\n");
 #endif
 	if (Hogproc == myproc)
-		Hogproc = (struct proc *) 0;
+		Hogproc = (struct process *) 0;
 	if (!exflag && (wtflags & TPWANY) && !(wtflags & (TPSESS|TPDEAD))) {
 		if (!(wtflags & TPWO))
 			wstart();

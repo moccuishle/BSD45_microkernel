@@ -35,7 +35,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/file.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
@@ -63,7 +63,7 @@ socreate(dom, aso, type, proto)
 	register int type;
 	int proto;
 {
-	struct proc *p = curproc;		/* XXX */
+	struct process *p = curproc;		/* XXX */
 	register struct protosw *prp;
 	register struct socket *so;
 	register int error;
@@ -342,7 +342,7 @@ sosend(so, addr, uio, top, control, flags)
 	struct mbuf *control;
 	int flags;
 {
-	struct proc *p = curproc;		/* XXX */
+	struct process *p = curproc;		/* XXX */
 	struct mbuf **mp;
 	register struct mbuf *m;
 	register long space, len, resid;
@@ -1064,7 +1064,7 @@ void
 sohasoutofband(so)
 	register struct socket *so;
 {
-	struct proc *p;
+	struct process *p;
 
 	if (so->so_pgid < 0)
 		gsignal(-so->so_pgid, SIGURG);

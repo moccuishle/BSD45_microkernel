@@ -44,7 +44,7 @@
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/resourcevar.h>
 #include <sys/vnode.h>
 #include <sys/file.h>
@@ -55,7 +55,7 @@
 /* EN: fork syscall entry that calls fork1 to create a child process without vfork semantics */
 /* ARGSUSED */
 fork(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -67,7 +67,7 @@ fork(p, uap, retval)
 /* EN: vfork syscall entry that calls fork1 with isvfork=1 so the child shares the parent's address space until exec/exit */
 /* ARGSUSED */
 vfork(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -80,14 +80,14 @@ int	nprocs = 1;		/* process 0 */
 /* 中文：fork/vfork 的核心实现：检查进程数与每用户限制、分配并初始化新 proc、挑选未用 PID、复制父进程资源，再由 vm_fork 复制地址空间 */
 /* EN: Core of fork/vfork: checks process limits, allocates and initializes a new proc, picks a free pid, copies parent resources, then calls vm_fork to clone the address space */
 fork1(p1, isvfork, retval)
-	register struct proc *p1;
+	register struct process *p1;
 	int isvfork;
 	register_t *retval;
 {
-	register struct proc *p2;
+	register struct process *p2;
 	register uid_t uid;
-	struct proc *newproc;
-	struct proc **hash;
+	struct process *newproc;
+	struct process **hash;
 	int count;
 	static int nextpid, pidchecked = 0;
 
@@ -115,7 +115,7 @@ fork1(p1, isvfork, retval)
 	}
 
 	/* Allocate new proc. */
-	MALLOC(newproc, struct proc *, sizeof(struct proc), M_PROC, M_WAITOK);
+	MALLOC(newproc, struct process *, sizeof(struct process), M_PROC, M_WAITOK);
 
 	/*
 	 * Find an unused process ID.  We remember a range of unused IDs

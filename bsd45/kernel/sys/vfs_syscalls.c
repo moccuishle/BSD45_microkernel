@@ -47,7 +47,7 @@
 #include <sys/stat.h>
 #include <sys/vnode.h>
 #include <sys/mount.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/uio.h>
 #include <sys/malloc.h>
 #include <sys/dirent.h>
@@ -57,7 +57,7 @@
 #include <vm/vm.h>
 #include <sys/sysctl.h>
 
-static int change_dir __P((struct nameidata *ndp, struct proc *p));
+static int change_dir __P((struct nameidata *ndp, struct process *p));
 static void checkdirs __P((struct vnode *olddp));
 
 /*
@@ -72,7 +72,7 @@ static void checkdirs __P((struct vnode *olddp));
 /* EN: Mount a file system: resolve the path to the covered vnode, allocate and init a mount structure, check permissions and call VFS_MOUNT */
 int
 mount(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct mount_args /* {
 		syscallarg(char *) type;
 		syscallarg(char *) path;
@@ -284,7 +284,7 @@ checkdirs(olddp)
 {
 	struct filedesc *fdp;
 	struct vnode *newdp;
-	struct proc *p;
+	struct process *p;
 
 	if (olddp->v_usecount == 1)
 		return;
@@ -322,7 +322,7 @@ checkdirs(olddp)
 /* EN: Unmount a file system: verify caller privileges and mount point validity, then call dounmount to do the real work */
 int
 unmount(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct unmount_args /* {
 		syscallarg(char *) path;
 		syscallarg(int) flags;
@@ -379,7 +379,7 @@ int
 dounmount(mp, flags, p)
 	register struct mount *mp;
 	int flags;
-	struct proc *p;
+	struct process *p;
 {
 	struct vnode *coveredvp;
 	int error;
@@ -429,7 +429,7 @@ struct ctldebug debug0 = { "syncprt", &syncprt };
 /* EN: Sync every mounted file system, calling VFS_SYNC on all writable mounts */
 int
 sync(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -469,7 +469,7 @@ sync(p, uap, retval)
 /* EN: Change file system quotas: resolve the path to its mount point and call VFS_QUOTACTL */
 int
 quotactl(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct quotactl_args /* {
 		syscallarg(char *) path;
 		syscallarg(int) cmd;
@@ -499,7 +499,7 @@ quotactl(p, uap, retval)
 /* EN: Get file system statistics by path name via VFS_STATFS and copy the result to user space */
 int
 statfs(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct statfs_args /* {
 		syscallarg(char *) path;
 		syscallarg(struct statfs *) buf;
@@ -531,7 +531,7 @@ statfs(p, uap, retval)
 /* EN: Get file system statistics by file descriptor, locate the mount via the vnode and call VFS_STATFS */
 int
 fstatfs(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct fstatfs_args /* {
 		syscallarg(int) fd;
 		syscallarg(struct statfs *) buf;
@@ -560,7 +560,7 @@ fstatfs(p, uap, retval)
 /* EN: Get statistics on all mounted file systems by walking the mount list and writing into the user buffer */
 int
 getfsstat(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct getfsstat_args /* {
 		syscallarg(struct statfs *) buf;
 		syscallarg(long) bufsize;
@@ -622,7 +622,7 @@ getfsstat(p, uap, retval)
 /* EN: Change the current working directory to the one referenced by a file descriptor, following any mount points */
 int
 fchdir(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct fchdir_args /* {
 		syscallarg(int) fd;
 	} */ *uap;
@@ -671,7 +671,7 @@ fchdir(p, uap, retval)
 /* EN: Change the current working directory to the directory named by the path argument */
 int
 chdir(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct chdir_args /* {
 		syscallarg(char *) path;
 	} */ *uap;
@@ -698,7 +698,7 @@ chdir(p, uap, retval)
 /* EN: Change the notion of root directory (chroot); reserved for the superuser */
 int
 chroot(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct chroot_args /* {
 		syscallarg(char *) path;
 	} */ *uap;
@@ -728,7 +728,7 @@ chroot(p, uap, retval)
 static int
 change_dir(ndp, p)
 	register struct nameidata *ndp;
-	struct proc *p;
+	struct process *p;
 {
 	struct vnode *vp;
 	int error;
@@ -755,7 +755,7 @@ change_dir(ndp, p)
 /* EN: Open a file or device: check permissions, allocate a descriptor, call vn_open and apply advisory locks when requested */
 int
 open(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct open_args /* {
 		syscallarg(char *) path;
 		syscallarg(int) flags;
@@ -834,7 +834,7 @@ open(p, uap, retval)
 /* EN: 4.3BSD compatibility creat system call, implemented by calling open with O_WRONLY|O_CREAT|O_TRUNC */
 int
 compat_43_creat(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_creat_args /* {
 		syscallarg(char *) path;
 		syscallarg(int) mode;
@@ -862,7 +862,7 @@ compat_43_creat(p, uap, retval)
 /* EN: Create a special file: make a character/block device, whiteout or bad-sector node according to mode; superuser only */
 int
 mknod(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct mknod_args /* {
 		syscallarg(char *) path;
 		syscallarg(int) mode;
@@ -939,7 +939,7 @@ mknod(p, uap, retval)
 /* EN: Create a named pipe (FIFO) by making a VFIFO-type vnode in the parent directory */
 int
 mkfifo(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct mkfifo_args /* {
 		syscallarg(char *) path;
 		syscallarg(int) mode;
@@ -981,7 +981,7 @@ mkfifo(p, uap, retval)
 /* EN: Create a hard file link: resolve source and target paths, check permissions and call VOP_LINK */
 int
 link(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct link_args /* {
 		syscallarg(char *) path;
 		syscallarg(char *) link;
@@ -1032,7 +1032,7 @@ link(p, uap, retval)
 /* EN: Create a symbolic link: store the user-supplied target string into a new link vnode */
 int
 symlink(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct symlink_args /* {
 		syscallarg(char *) path;
 		syscallarg(char *) link;
@@ -1077,7 +1077,7 @@ out:
 /* EN: Delete a whiteout entry from the file system, used to remove a whiteout marker */
 int
 undelete(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct undelete_args /* {
 		syscallarg(char *) path;
 	} */ *uap;
@@ -1118,7 +1118,7 @@ undelete(p, uap, retval)
 /* EN: Delete a name from the file system (unlink), refusing to remove a mounted root directory */
 int
 unlink(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct unlink_args /* {
 		syscallarg(char *) path;
 	} */ *uap;
@@ -1168,7 +1168,7 @@ unlink(p, uap, retval)
 /* EN: Reposition the read/write offset of a descriptor, supporting relative, absolute and end-of-file whence values */
 int
 lseek(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct lseek_args /* {
 		syscallarg(int) fd;
 		syscallarg(int) pad;
@@ -1216,7 +1216,7 @@ lseek(p, uap, retval)
 /* EN: 4.3BSD compatibility lseek system call: translate arguments, call the new lseek and return a long result */
 int
 compat_43_lseek(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_lseek_args /* {
 		syscallarg(int) fd;
 		syscallarg(long) offset;
@@ -1249,7 +1249,7 @@ compat_43_lseek(p, uap, retval)
 /* EN: Check a user's access permissions on a file using the real uid/gid, mapping R_OK/W_OK/X_OK to vnode permissions */
 int
 access(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct access_args /* {
 		syscallarg(char *) path;
 		syscallarg(int) flags;
@@ -1299,7 +1299,7 @@ out1:
 /* EN: 4.3BSD compatibility stat system call (follows links), converting the stat structure before copying out */
 int
 compat_43_stat(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_stat_args /* {
 		syscallarg(char *) path;
 		syscallarg(struct ostat *) ub;
@@ -1332,7 +1332,7 @@ compat_43_stat(p, uap, retval)
 /* EN: 4.3BSD compatibility lstat system call (does not follow links), returning containing-directory attributes for links */
 int
 compat_43_lstat(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_lstat_args /* {
 		syscallarg(char *) path;
 		syscallarg(struct ostat *) ub;
@@ -1426,7 +1426,7 @@ cvtstat(st, ost)
 /* EN: Get file status following symbolic links, obtain attributes via vn_stat and copy them to user space */
 int
 stat(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct stat_args /* {
 		syscallarg(char *) path;
 		syscallarg(struct stat *) ub;
@@ -1457,7 +1457,7 @@ stat(p, uap, retval)
 /* EN: Get file status without following symbolic links, using containing-directory attributes for links but keeping link mode/size */
 int
 lstat(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct lstat_args /* {
 		syscallarg(char *) path;
 		syscallarg(struct stat *) ub;
@@ -1518,7 +1518,7 @@ lstat(p, uap, retval)
 /* EN: Get configurable pathname-related system variables by calling VOP_PATHCONF */
 int
 pathconf(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct pathconf_args /* {
 		syscallarg(char *) path;
 		syscallarg(int) name;
@@ -1545,7 +1545,7 @@ pathconf(p, uap, retval)
 /* EN: Read and return the target string of a symbolic link via VOP_READLINK into the user buffer */
 int
 readlink(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct readlink_args /* {
 		syscallarg(char *) path;
 		syscallarg(char *) buf;
@@ -1591,7 +1591,7 @@ readlink(p, uap, retval)
 /* EN: Set a file's flags attribute given its path name (chflags) */
 int
 chflags(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct chflags_args /* {
 		syscallarg(char *) path;
 		syscallarg(int) flags;
@@ -1624,7 +1624,7 @@ chflags(p, uap, retval)
 /* EN: Set a file's flags attribute given its file descriptor (fchflags) */
 int
 fchflags(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct fchflags_args /* {
 		syscallarg(int) fd;
 		syscallarg(int) flags;
@@ -1656,7 +1656,7 @@ fchflags(p, uap, retval)
 /* EN: Change a file's permission mode given its path name (chmod) */
 int
 chmod(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct chmod_args /* {
 		syscallarg(char *) path;
 		syscallarg(int) mode;
@@ -1689,7 +1689,7 @@ chmod(p, uap, retval)
 /* EN: Change a file's permission mode given its file descriptor (fchmod) */
 int
 fchmod(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct fchmod_args /* {
 		syscallarg(int) fd;
 		syscallarg(int) mode;
@@ -1721,7 +1721,7 @@ fchmod(p, uap, retval)
 /* EN: Set a file's owner uid and gid given its path name (chown) */
 int
 chown(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct chown_args /* {
 		syscallarg(char *) path;
 		syscallarg(int) uid;
@@ -1756,7 +1756,7 @@ chown(p, uap, retval)
 /* EN: Set a file's owner uid and gid given its file descriptor (fchown) */
 int
 fchown(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct fchown_args /* {
 		syscallarg(int) fd;
 		syscallarg(int) uid;
@@ -1790,7 +1790,7 @@ fchown(p, uap, retval)
 /* EN: Set a file's access and modification times (utimes), using the current time when the pointer is NULL */
 int
 utimes(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct utimes_args /* {
 		syscallarg(char *) path;
 		syscallarg(struct timeval *) tptr;
@@ -1834,7 +1834,7 @@ utimes(p, uap, retval)
 /* EN: Truncate a file to the given length by path name (truncate) */
 int
 truncate(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct truncate_args /* {
 		syscallarg(char *) path;
 		syscallarg(int) pad;
@@ -1873,7 +1873,7 @@ truncate(p, uap, retval)
 /* EN: Truncate a file to the given length by file descriptor (ftruncate), requiring a writable descriptor */
 int
 ftruncate(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct ftruncate_args /* {
 		syscallarg(int) fd;
 		syscallarg(int) pad;
@@ -1913,7 +1913,7 @@ ftruncate(p, uap, retval)
 /* EN: 4.3BSD compatibility truncate system call that translates arguments and calls the new truncate */
 int
 compat_43_truncate(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_truncate_args /* {
 		syscallarg(char *) path;
 		syscallarg(long) length;
@@ -1939,7 +1939,7 @@ compat_43_truncate(p, uap, retval)
 /* EN: 4.3BSD compatibility ftruncate system call that translates arguments and calls the new ftruncate */
 int
 compat_43_ftruncate(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_ftruncate_args /* {
 		syscallarg(int) fd;
 		syscallarg(long) length;
@@ -1966,7 +1966,7 @@ compat_43_ftruncate(p, uap, retval)
 /* EN: Sync all modifications of an open file to storage (fsync) */
 int
 fsync(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct fsync_args /* {
 		syscallarg(int) fd;
 	} */ *uap;
@@ -1994,7 +1994,7 @@ fsync(p, uap, retval)
 /* EN: Rename a file or directory, validating type consistency and same-name cases before calling VOP_RENAME */
 int
 rename(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct rename_args /* {
 		syscallarg(char *) from;
 		syscallarg(char *) to;
@@ -2081,7 +2081,7 @@ out1:
 /* EN: Create a directory by making a VDIR-type vnode in the parent directory with the creation mode mask applied */
 int
 mkdir(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct mkdir_args /* {
 		syscallarg(char *) path;
 		syscallarg(int) mode;
@@ -2124,7 +2124,7 @@ mkdir(p, uap, retval)
 /* EN: Remove an empty directory (rmdir), refusing '.', non-empty directories and mount roots */
 int
 rmdir(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct rmdir_args /* {
 		syscallarg(char *) path;
 	} */ *uap;
@@ -2179,7 +2179,7 @@ out:
 /* EN: 4.3BSD compatibility getdirentries: read directory entries in an FS-independent format with union-mount and endianness handling */
 int
 compat_43_getdirentries(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_getdirentries_args /* {
 		syscallarg(int) fd;
 		syscallarg(char *) buf;
@@ -2273,7 +2273,7 @@ unionread:
 #ifdef UNION
 {
 	extern int (**union_vnodeop_p)();
-	extern struct vnode *union_dircache __P((struct vnode*, struct proc*));
+	extern struct vnode *union_dircache __P((struct vnode*, struct process*));
 
 	if ((SCARG(uap, count) == auio.uio_resid) &&
 	    (vp->v_op == union_vnodeop_p)) {
@@ -2338,7 +2338,7 @@ unionread:
 /* EN: Read a block of directory entries in an FS-independent format (getdirentries), with union-mount fallback */
 int
 getdirentries(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct getdirentries_args /* {
 		syscallarg(int) fd;
 		syscallarg(char *) buf;
@@ -2382,7 +2382,7 @@ unionread:
 #ifdef UNION
 {
 	extern int (**union_vnodeop_p)();
-	extern struct vnode *union_dircache __P((struct vnode*, struct proc*));
+	extern struct vnode *union_dircache __P((struct vnode*, struct process*));
 
 	if ((SCARG(uap, count) == auio.uio_resid) &&
 	    (vp->v_op == union_vnodeop_p)) {
@@ -2446,7 +2446,7 @@ unionread:
 /* EN: Get and set the mode mask used when creating file system nodes (umask) */
 int
 umask(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct umask_args /* {
 		syscallarg(int) newmask;
 	} */ *uap;
@@ -2469,7 +2469,7 @@ umask(p, uap, retval)
 /* EN: Revoke all references to a file by calling VOP_REVOKE to invalidate all open instances of the vnode */
 int
 revoke(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct revoke_args /* {
 		syscallarg(char *) path;
 	} */ *uap;

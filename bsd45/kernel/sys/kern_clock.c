@@ -43,7 +43,7 @@
 #include <sys/dkstat.h>
 #include <sys/callout.h>
 #include <sys/kernel.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/resourcevar.h>
 
 #include <machine/cpu.h>
@@ -141,7 +141,7 @@ hardclock(frame)
 	register struct clockframe *frame;
 {
 	register struct callout *p1;
-	register struct proc *p;
+	register struct process *p;
 	register int delta, needsoft;
 	extern int tickdelta;
 	extern long timedelta;
@@ -378,7 +378,7 @@ hzto(tv)
 /* EN: Start profiling on a process: set the P_PROFIL flag and, for the first profiled process, switch the stat clock to profhz */
 void
 startprofclock(p)
-	register struct proc *p;
+	register struct process *p;
 {
 	int s;
 
@@ -400,7 +400,7 @@ startprofclock(p)
 /* EN: Stop profiling on a process: clear the P_PROFIL flag and, for the last profiled process, restore the stat clock to stathz */
 void
 stopprofclock(p)
-	register struct proc *p;
+	register struct process *p;
 {
 	int s;
 
@@ -430,7 +430,7 @@ statclock(frame)
 #ifdef GPROF
 	register struct gmonparam *g;
 #endif
-	register struct proc *p;
+	register struct process *p;
 	register int i;
 
 	if (CLKF_USERMODE(frame)) {

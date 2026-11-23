@@ -42,7 +42,7 @@
 #include <sys/systm.h>
 #include <sys/buf.h>
 #include <sys/conf.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 
 /* 中文：物理 I/O 的桩函数，函数体已删除，始终返回 EIO */
 /* EN: Physical I/O stub whose body has been removed; always returns EIO */

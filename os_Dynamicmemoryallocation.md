@@ -9,7 +9,7 @@
 
 **本系统是内核态线程和进程模型（KLT，1:1 模型）** —— 这是用户反复强调的硬约束，任何改动都不得破坏：
 
-- 进程 = `struct proc`（资源 + 地址空间的容器），线程 = `struct kthread`（调度单位）。
+- 进程 = `struct process`（资源 + 地址空间的容器），线程 = `struct kthread`（调度单位）。
 - 每个用户线程配一个独立内核栈 + 一个 TCB（内核线程 `t_proc==NULL` 与用户线程共用同一个线程池）。
 - 主线程上下文在 `proc->uk_regs`，其余线程在 `t->t_regs`；调度器只遍历 `kthreads[]`，从不按 `procs[]` 状态机调度。
 - 动态化只能改变"对象如何分配与串联"，**绝不能**退化成用户态线程库或 N:1 模型。
@@ -24,7 +24,7 @@
 
 ### 2.1 `procs[NPROC]` 静态数组（上限 8）
 - `bsd45/kernel/sys/usermode.c:160` → `#define NPROC 8`
-- `:201` → `static struct proc procs[NPROC];`
+- `:201` → `static struct process procs[NPROC];`
 - `proc_alloc()`（`:2620`）遍历找 `P_FREE` 槽，找不到返回 0 → `fork`/`vfork` 返回 `-EAGAIN`。
 
 ### 2.2 TCB 池 16 槽（隐藏的真正瓶颈）
@@ -68,7 +68,7 @@
 因此采用**最稳妥且能达到同等效果**的方案：
 - **静态扩容**：`NPROC` 8→**24**、`NKTHREAD` 16→**24**（不是 256，见下方引导器约束）。每槽一个 8KB 内核栈，`KSTACK_VA=0xFEA00000` 位于共享 PDE `0x3fa`。
   - **关键坑：stage2 引导器地址冲突（本次实测踩到）**。stage2（`boot/i386/stage2.s`）在把 PT_LOAD 段搬到 `p_vaddr-0xFE000000` 之前，先把 ELF 头快照到 `0x8F000`、用 `0x9F000` 作栈，自身运行在 `0x90000`。当内核 `.data`+`.rdata` 段物理目标越过 `0x88000~0x8F000` 时，搬运过程会覆盖正在运行的 stage2/快照 → 内核卡在段搬运、`debugcon` 只到 `1234a`（无 `5`）、串口/VGA 全无输出。用 QEMU `-debugcon file:` 捕获 0xE9 检查点精确定位到此。
-  - 实测：`NPROC=256`→内核 860KB→不引导；`96`→`.rdata` 在 0x8f000 直接冲突→不引导；`40`→sections end 0x96014→仍冲突；**`24`→sections end `0x8e014` < 0x8f000，`.rdata` 在 0x88000，引导成功**（debugcon `1234a5` 全检查点通过）。`struct proc`=1808B。这是 stage1/stage2 实模式 <1MB 布局下的安全最大值。
+  - 实测：`NPROC=256`→内核 860KB→不引导；`96`→`.rdata` 在 0x8f000 直接冲突→不引导；`40`→sections end 0x96014→仍冲突；**`24`→sections end `0x8e014` < 0x8f000，`.rdata` 在 0x88000，引导成功**（debugcon `1234a5` 全检查点通过）。`struct process`=1808B。这是 stage1/stage2 实模式 <1MB 布局下的安全最大值。
   - **若要突破 24**：需改 stage2 把快照/栈/自身搬到内核段之上（需处理 <1MB 与自搬移），属于引导器改造，超出本次范围。
 - **动态内存上界（关键）**：`page_alloc()` 的写死上界 `0x3f000000`（~61MB）改为按 BIOS 探测的 `physmem` 动态计算（`usermode.c`）。**这才是"上限由内存决定"的落地点**：默认 64MB guest 下内存在 256 之前先耗尽（fork 返回 -EAGAIN/-ENOMEM），VMware 加大内存即可创建更多进程，直到 256 的栈 VA 硬限。
 - **tid 分区**（避免 pid 到 257 后的 tid 冲突）：主线程 tid==pid（1..257）；额外用户线程 `TID_USER_BASE(1000) + pid*TID_STRIDE(16) + n`；内核线程 `TID_KERN_BASE(0x40000000) + slot`。三段隔离，定义在 `kthread.h`。
@@ -194,7 +194,7 @@ proctest: PASS
 ## 6. 相关文件
 - `bsd45/kernel/sys/usermode.c` —— 进程表、调度器、页分配器、syscall
 - `bsd45/kernel/thread/kthread.c` / `kthread.h` —— TCB 池、线程调度、栈
-- `bsd45/kernel/include/sys/proc.h` —— `struct proc`
+- `bsd45/kernel/include/sys/kprocess.h` —— `struct process`
 - `bsd45/kernel/thread/sync.c` —— 待删无用 extern
 - `os_thread-process.md` / `os_sched.md` —— 架构设计依据
 - `tools/test_net.sh` —— Ubuntu bash 验收脚本（后续加断言）
@@ -322,7 +322,7 @@ staged: 00 00 00 ...   elf: 0d 40 00 ...
 
 - `procs` / `kthreads` 由数组改为指针，`procs[i]`、`&procs[i]`、
   `me - kthreads` 语义不变（连续数组 + 指针运算）。
-- KLT 1:1 模型、调度器遍历方式、`struct proc`/`struct kthread` 布局**完全未改**。
+- KLT 1:1 模型、调度器遍历方式、`struct process`/`struct kthread` 布局**完全未改**。
 - 内核 `.bss` 反而变小：`sections end` 从 `0x8E014` 变成 `0x83014`。
 
 ### 8.4 当前状态（S407 结束时，已由 §9 关闭）
@@ -517,7 +517,7 @@ mem: 932 pages in use, 23368 allocated, next free a0f000
 
 ### 10.1 容量与 VA 布局
 
-`1024 x sizeof(struct proc) = 1024 x 1808 = 1.77MB`，已塞不进
+`1024 x sizeof(struct process) = 1024 x 1808 = 1.77MB`，已塞不进
 `0xFE340000..0xFE3FFFFF` 那 768KB 空档，所以整组内核窗口上移，放到 locore
 12MB 恒等映射窗口之上、没有任何既有窗口占用的地方：
 
@@ -669,7 +669,7 @@ mem: 2951 pages in use, 52017 allocated, next free 2508000
 - **内存容量不写死**：启动时由 BIOS/E801 → `physmem` 页数识别，128MB～24GB
   都走同一套公式；以后加内存到 6/8/12/16/20/24GB 不需要改策略代码。
 - **线程栈固定**：每个线程 16KB 内核栈 + 2MB 用户栈，页面按需分配。
-- **保持 KLT 1:1**：`struct proc` 仍是资源/地址空间容器，`struct kthread` 仍是
+- **保持 KLT 1:1**：`struct process` 仍是资源/地址空间容器，`struct kthread` 仍是
   唯一调度单位；TCB 池、tid 分区、run queue 语义不变。
 
 ### 11.2 规划公式（3:4:1 + 每 4MB 一个线程）

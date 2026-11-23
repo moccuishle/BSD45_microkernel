@@ -36,7 +36,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/user.h>
 
 #include <sys/mount.h>
@@ -154,7 +154,7 @@ sysctl_doprof(name, namelen, oldp, oldlenp, newp, newlen, p)
 /* ARGSUSED */
 int
 profil(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct profil_args /* {
 		syscallarg(caddr_t) samples;
 		syscallarg(u_int) size;
@@ -212,7 +212,7 @@ profil(p, uap, retval)
 /* EN: Update the user-level profile sample count in a profiling clock interrupt; if fuswintr/suswintr fail, record the pc and request an AST for later handling */
 void
 addupc_intr(p, pc, ticks)
-	register struct proc *p;
+	register struct process *p;
 	register u_long pc;
 	u_int ticks;
 {
@@ -244,7 +244,7 @@ addupc_intr(p, pc, ticks)
 /* EN: Update the user-level profile sample count via copyin/copyout in a fault-capable context, turning off profiling for the process if the update fails */
 void
 addupc_task(p, pc, ticks)
-	register struct proc *p;
+	register struct process *p;
 	register u_long pc;
 	u_int ticks;
 {

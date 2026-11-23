@@ -292,7 +292,7 @@ function doit() {
 	# cred (if any)
 	do_offset("struct ucred *");
 	# proc (if any)
-	do_offset("struct proc *");
+	do_offset("struct process *");
 	# componentname
 	do_offset("struct componentname *");
 	# transport layer information

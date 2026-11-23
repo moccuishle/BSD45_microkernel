@@ -39,7 +39,7 @@
  */
 
 #include <sys/param.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/mount.h>
 #include <sys/vnode.h>
 #include <sys/file.h>
@@ -49,7 +49,7 @@
 /* 中文：acct 系统调用入口：函数体已删除，直接返回 ENOSYS 表示不支持记账 */
 /* EN: The acct system-call entry point: its body has been removed, so it simply returns ENOSYS to report accounting unsupported */
 acct(a1, a2, a3)
-	struct proc *a1;
+	struct process *a1;
 	struct acct_args /* {
 		syscallarg(char *) path;
 	} */ *a2;
@@ -64,7 +64,7 @@ acct(a1, a2, a3)
 /* 中文：进程退出时的记账处理：函数体已删除，为空操作 */
 /* EN: Accounting hook on process exit: its body has been removed, so it is a no-op */
 acct_process(a1)
-	struct proc *a1;
+	struct process *a1;
 {
 
 	/*
@@ -108,7 +108,7 @@ acctwatch(a)
 			savacctp = NULL;
 			return;
 		}
-		(void)VFS_STATFS(savacctp->v_mount, &sb, (struct proc *)0);
+		(void)VFS_STATFS(savacctp->v_mount, &sb, (struct process *)0);
 		if (sb.f_bavail > acctresume * sb.f_blocks / 100) {
 			acctp = savacctp;
 			savacctp = NULL;
@@ -122,7 +122,7 @@ acctwatch(a)
 			acctp = NULL;
 			return;
 		}
-		(void)VFS_STATFS(acctp->v_mount, &sb, (struct proc *)0);
+		(void)VFS_STATFS(acctp->v_mount, &sb, (struct process *)0);
 		if (sb.f_bavail <= acctsuspend * sb.f_blocks / 100) {
 			savacctp = acctp;
 			acctp = NULL;

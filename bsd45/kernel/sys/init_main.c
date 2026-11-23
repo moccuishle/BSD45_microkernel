@@ -45,7 +45,7 @@
 #include <sys/kernel.h>
 #include <sys/mount.h>
 #include <sys/map.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/resourcevar.h>
 #include <sys/signalvar.h>
 #include <sys/systm.h>
@@ -76,13 +76,13 @@ char	copyright[] =
 /* Components of the first process -- never freed. */
 struct	session session0;
 struct	pgrp pgrp0;
-struct	proc proc0;
+struct	process proc0;
 struct	pcred cred0;
 struct	filedesc0 filedesc0;
 struct	plimit limit0;
 struct	vmspace vmspace0;
-struct	proc *curproc = &proc0;
-struct	proc *initproc, *pageproc;
+struct	process *curproc = &proc0;
+struct	process *initproc, *pageproc;
 
 int	cmask = CMASK;
 extern	struct user *proc0paddr;
@@ -92,7 +92,7 @@ int	boothowto;
 struct	timeval boottime;
 struct	timeval runtime;
 
-static void start_init __P((struct proc *p, void *framep));
+static void start_init __P((struct process *p, void *framep));
 
 /*
  * System startup; initialize the world, create process 0, mount root
@@ -105,7 +105,7 @@ static void start_init __P((struct proc *p, void *framep));
 main(framep)
 	void *framep;
 {
-	register struct proc *p;
+	register struct process *p;
 	register struct filedesc0 *fdp;
 	register struct pdevinit *pdev;
 	register int i;
@@ -319,7 +319,7 @@ static char *initpaths[] = {
 /* EN: Start the initial user process: forge the execve frame and arguments, try each init path in initpaths, and panic if none works */
 static void
 start_init(p, framep)
-	struct proc *p;
+	struct process *p;
 	void *framep;
 {
 	vm_offset_t addr;

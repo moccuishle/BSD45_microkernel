@@ -13,7 +13,7 @@ $(shell mkdir -p ${include_machine_OBJ_DIR})
 CPPFLAGS := $(CPPFLAGS) -I$(MAKEFILE_DIR_include_machine_mk)
 
 # ---- NOT BUILT: source inventory (reference only) ----
-# headers: ansi.h cpu.h dbg.h dkio.h exec.h float.h frame.h limits.h mtpr.h npx.h param.h pcb.h pmap.h proc.h profile.h psl.h pte.h ptrace.h reg.h segments.h signal.h specialreg.h trap.h tss.h types.h vmparam.h
+# headers: ansi.h cpu.h dbg.h dkio.h exec.h float.h frame.h limits.h mtpr.h npx.h param.h pcb.h pmap.h kprocess.h profile.h psl.h pte.h ptrace.h reg.h segments.h signal.h specialreg.h trap.h tss.h types.h vmparam.h
 
 include_machine_OBJS :=
 

@@ -44,7 +44,7 @@
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/file.h>
 #include <sys/vnode.h>
 #include <sys/unistd.h>
@@ -80,7 +80,7 @@ static struct sysctl_lock {
 /* EN: The sysctl system call: validates permissions and names, dispatches by top-level category to the appropriate handler, and locks/wires the user buffer around access */
 int
 __sysctl(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct __sysctl_args /* {
 		syscallarg(int *) name;
 		syscallarg(u_int) namelen;
@@ -193,7 +193,7 @@ kern_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	size_t *oldlenp;
 	void *newp;
 	size_t newlen;
-	struct proc *p;
+	struct process *p;
 {
 	int error, level, inthostid;
 	extern char ostype[], osrelease[], version[];
@@ -285,7 +285,7 @@ hw_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	size_t *oldlenp;
 	void *newp;
 	size_t newlen;
-	struct proc *p;
+	struct process *p;
 {
 	extern char machine[], cpu_model[];
 
@@ -339,7 +339,7 @@ debug_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	size_t *oldlenp;
 	void *newp;
 	size_t newlen;
-	struct proc *p;
+	struct process *p;
 {
 	struct ctldebug *cdp;
 
@@ -584,7 +584,7 @@ sysctl_doproc(name, namelen, where, sizep)
 	char *where;
 	size_t *sizep;
 {
-	register struct proc *p;
+	register struct process *p;
 	register struct kinfo_proc *dp = (struct kinfo_proc *)where;
 	register int needed = 0;
 	int buflen = where != NULL ? *sizep : 0;
@@ -641,7 +641,7 @@ again:
 		if (buflen >= sizeof(struct kinfo_proc)) {
 			fill_eproc(p, &eproc);
 			if (error = copyout((caddr_t)p, &dp->kp_proc,
-			    sizeof(struct proc)))
+			    sizeof(struct process)))
 				return (error);
 			if (error = copyout((caddr_t)&eproc, &dp->kp_eproc,
 			    sizeof(eproc)))
@@ -674,7 +674,7 @@ again:
 /* EN: Fill an eproc structure for a process with its credentials, virtual memory, parent, process group and controlling terminal information */
 void
 fill_eproc(p, ep)
-	register struct proc *p;
+	register struct process *p;
 	register struct eproc *ep;
 {
 	register struct tty *tp;
@@ -741,7 +741,7 @@ fill_eproc(p, ep)
 /* 中文：4.3BSD 兼容的 getkerninfo 系统调用，把各类内核信息请求转换为对应 sysctl 调用并返回结果大小 */
 /* EN: The 4.3BSD-compatible getkerninfo system call, translating various kernel-info requests into corresponding sysctl calls and returning the result size */
 compat_43_getkerninfo(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_getkerninfo_args /* {
 		syscallarg(int) op;
 		syscallarg(char *) where;

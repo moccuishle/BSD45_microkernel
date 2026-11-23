@@ -68,7 +68,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 
 #include <vm/vm.h>
 
@@ -90,7 +90,7 @@ struct svm_allocate_args {
 /* EN: MACH-compatible syscall wrapper that allocates zero-fill memory in a process map and writes the resulting address back to the user argument */
 int
 svm_allocate(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct svm_allocate_args *uap;
 	int *retval;
 {
@@ -120,7 +120,7 @@ struct svm_deallocate_args {
 /* EN: MACH-compatible syscall wrapper that deallocates a specified range in a process map */
 int
 svm_deallocate(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct svm_deallocate_args *uap;
 	int *retval;
 {
@@ -142,7 +142,7 @@ struct svm_inherit_args {
 /* EN: MACH-compatible syscall wrapper that sets the inheritance of a specified range in a process map */
 int
 svm_inherit(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct svm_inherit_args *uap;
 	int *retval;
 {
@@ -165,7 +165,7 @@ struct svm_protect_args {
 /* EN: MACH-compatible syscall wrapper that sets the protection of a specified range in a process map */
 int
 svm_protect(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct svm_protect_args *uap;
 	int *retval;
 {

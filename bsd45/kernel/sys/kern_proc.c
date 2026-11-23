@@ -37,7 +37,7 @@
 #include <sys/systm.h>
 #include <sys/map.h>
 #include <sys/kernel.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/buf.h>
 #include <sys/acct.h>
 #include <sys/wait.h>
@@ -133,7 +133,7 @@ chgproccnt(uid, diff)
 /* 中文：判断进程 p 是否为当前进程的后代（沿父进程链向上查找） */
 /* EN: Determine whether process p is an inferior (descendant) of the current process */
 inferior(p)
-	register struct proc *p;
+	register struct process *p;
 {
 
 	for (; p != curproc; p = p->p_pptr)
@@ -147,11 +147,11 @@ inferior(p)
  */
 /* 中文：按进程号 pid 在哈希表中查找并返回对应进程，未找到返回 NULL */
 /* EN: Locate a process by pid in the hash table; returns NULL if not found */
-struct proc *
+struct process *
 pfind(pid)
 	register pid_t pid;
 {
-	register struct proc *p;
+	register struct process *p;
 
 	for (p = PIDHASH(pid)->lh_first; p != 0; p = p->p_hash.le_next)
 		if (p->p_pid == pid)
@@ -184,7 +184,7 @@ pgfind(pgid)
 /* EN: Move process p into a new or existing process group (creating a session if mksess) and fix job-control eligibility */
 int
 enterpgrp(p, pgid, mksess)
-	register struct proc *p;
+	register struct process *p;
 	pid_t pgid;
 	int mksess;
 {
@@ -198,7 +198,7 @@ enterpgrp(p, pgid, mksess)
 #endif
 	if (pgrp == NULL) {
 		pid_t savepid = p->p_pid;
-		struct proc *np;
+		struct process *np;
 		/*
 		 * new process group
 		 */
@@ -264,7 +264,7 @@ enterpgrp(p, pgid, mksess)
 /* EN: Remove a process from its process group, deleting the group when it becomes empty */
 int
 leavepgrp(p)
-	register struct proc *p;
+	register struct process *p;
 {
 
 	LIST_REMOVE(p, p_pglist);
@@ -309,7 +309,7 @@ static void orphanpg();
 /* EN: Adjust job-control counters when a process enters/leaves a group, orphaning groups whose count hits zero */
 void
 fixjobc(p, pgrp, entering)
-	register struct proc *p;
+	register struct process *p;
 	register struct pgrp *pgrp;
 	int entering;
 {
@@ -353,7 +353,7 @@ static void
 orphanpg(pg)
 	struct pgrp *pg;
 {
-	register struct proc *p;
+	register struct process *p;
 
 	for (p = pg->pg_members.lh_first; p != 0; p = p->p_pglist.le_next) {
 		if (p->p_stat == SSTOP) {
@@ -373,7 +373,7 @@ orphanpg(pg)
 pgrpdump()
 {
 	register struct pgrp *pgrp;
-	register struct proc *p;
+	register struct process *p;
 	register i;
 
 	for (i = 0; i <= pgrphash; i++) {

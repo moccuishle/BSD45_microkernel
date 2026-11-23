@@ -43,7 +43,7 @@
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
 #include <sys/vnode.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
@@ -72,7 +72,7 @@ int nfiles;			/* actual number of open files */
 /* EN: Implement the getdtablesize system call: return the number of file descriptors the process may open (the smaller of the rlimit and maxfiles) */
 int
 getdtablesize(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -89,7 +89,7 @@ getdtablesize(p, uap, retval)
 /* EN: Implement the dup system call: duplicate a file descriptor onto the lowest available one and return it */
 int
 dup(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct dup_args /* {
 		syscallarg(u_int) fd;
 	} */ *uap;
@@ -124,7 +124,7 @@ dup(p, uap, retval)
 /* EN: Implement the dup2 system call: duplicate file descriptor from onto the specified to descriptor, closing to first if needed */
 int
 dup2(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct dup2_args /* {
 		syscallarg(u_int) from;
 		syscallarg(u_int) to;
@@ -168,7 +168,7 @@ dup2(p, uap, retval)
 /* EN: Implement the fcntl system call: perform control operations on a file descriptor such as duplication, flag manipulation and record locking */
 int
 fcntl(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct fcntl_args /* {
 		syscallarg(int) fd;
 		syscallarg(int) cmd;
@@ -247,7 +247,7 @@ fcntl(p, uap, retval)
 		if ((long)SCARG(uap, arg) <= 0) {
 			SCARG(uap, arg) = (void *)(-(long)SCARG(uap, arg));
 		} else {
-			struct proc *p1 = pfind((long)SCARG(uap, arg));
+			struct process *p1 = pfind((long)SCARG(uap, arg));
 			if (p1 == 0)
 				return (ESRCH);
 			SCARG(uap, arg) = (void *)(long)p1->p_pgrp->pg_id;
@@ -345,7 +345,7 @@ finishdup(fdp, old, new, retval)
 /* EN: Implement the close system call: validate the descriptor, clear mapping flags and decrement the file reference count, closing the file when needed */
 int
 close(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct close_args /* {
 		syscallarg(int) fd;
 	} */ *uap;
@@ -380,7 +380,7 @@ close(p, uap, retval)
 /* EN: Compatibility 4.3BSD fstat system call: convert the new stat structure into the old ostat form before returning */
 int
 compat_43_fstat(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_fstat_args /* {
 		syscallarg(int) fd;
 		syscallarg(struct ostat *) sb;
@@ -427,7 +427,7 @@ compat_43_fstat(p, uap, retval)
 /* EN: Implement the fstat system call: retrieve status information of the file behind a descriptor and return it to userland */
 int
 fstat(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct fstat_args /* {
 		syscallarg(int) fd;
 		syscallarg(struct stat *) sb;
@@ -471,7 +471,7 @@ fstat(p, uap, retval)
 /* EN: Implement the fpathconf system call: return pathconf limit values for the descriptor's file */
 int
 fpathconf(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct fpathconf_args /* {
 		syscallarg(int) fd;
 		syscallarg(int) name;
@@ -513,7 +513,7 @@ int fdexpand;
 /* EN: Allocate a new file descriptor for a process: search for a free slot from want or fd_freefile, expanding the descriptor array if needed */
 int
 fdalloc(p, want, result)
-	struct proc *p;
+	struct process *p;
 	int want;
 	int *result;
 {
@@ -584,7 +584,7 @@ fdalloc(p, want, result)
 /* EN: Check whether a process has n file descriptors available */
 int
 fdavail(p, n)
-	struct proc *p;
+	struct process *p;
 	register int n;
 {
 	register struct filedesc *fdp = p->p_fd;
@@ -609,7 +609,7 @@ fdavail(p, n)
 /* EN: Create a new open file structure and allocate a descriptor for it, returning both the structure and the descriptor number */
 int
 falloc(p, resultfp, resultfd)
-	register struct proc *p;
+	register struct process *p;
 	struct file **resultfp;
 	int *resultfd;
 {
@@ -674,7 +674,7 @@ ffree(fp)
 /* EN: Copy a process's filedesc structure (used by fork): take vnode references and copy the descriptor table into the new structure */
 struct filedesc *
 fdcopy(p)
-	struct proc *p;
+	struct process *p;
 {
 	register struct filedesc *newfdp, *fdp = p->p_fd;
 	register struct file **fpp;
@@ -729,7 +729,7 @@ fdcopy(p)
 /* EN: Release a filedesc structure: when the refcount reaches zero, close all open files and free related resources */
 void
 fdfree(p)
-	struct proc *p;
+	struct process *p;
 {
 	register struct filedesc *fdp = p->p_fd;
 	struct file **fpp;
@@ -760,7 +760,7 @@ fdfree(p)
 int
 closef(fp, p)
 	register struct file *fp;
-	register struct proc *p;
+	register struct process *p;
 {
 	struct vnode *vp;
 	struct flock lf;
@@ -815,7 +815,7 @@ closef(fp, p)
 /* EN: Implement the flock system call: apply an advisory record lock of the requested type to the whole file */
 int
 flock(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct flock_args /* {
 		syscallarg(int) fd;
 		syscallarg(int) how;
@@ -870,7 +870,7 @@ int
 fdopen(dev, mode, type, p)
 	dev_t dev;
 	int mode, type;
-	struct proc *p;
+	struct process *p;
 {
 
 	/*

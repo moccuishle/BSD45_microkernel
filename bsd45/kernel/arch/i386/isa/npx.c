@@ -41,7 +41,7 @@
 #include <sys/systm.h>
 #include <sys/conf.h>
 #include <sys/file.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/user.h>
 #include <sys/ioctl.h>
 
@@ -59,7 +59,7 @@ struct	isa_driver npxdriver = {
 	npxprobe, npxattach, "npx",
 };
 
-struct proc *npxproc;	/* process who owns device, otherwise zero */
+struct process *npxproc;	/* process who owns device, otherwise zero */
 struct pcb *npxpcb;	/* owners context structure */
 static npxexists;
 extern long npx0mask;

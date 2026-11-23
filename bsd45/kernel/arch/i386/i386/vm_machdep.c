@@ -40,7 +40,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/malloc.h>
 #include <sys/buf.h>
 #include <sys/vnode.h>
@@ -63,7 +63,7 @@
 /* EN: Copies p1's PCB and live kernel stack into p2's u area, maps the child's UPAGES to its kernel stack with pmap_enter, activates the child pmap; returns 1 in the child via savectx. */
 /* 中文：把 p1 的 PCB 和正在使用的内核栈复制到 p2 的 u 区，用 pmap_enter 把子进程的 UPAGES 映射到其内核栈并激活子进程 pmap，子进程经 savectx 返回 1。 */
 cpu_fork(p1, p2)
-	register struct proc *p1, *p2;
+	register struct process *p1, *p2;
 {
 	register struct user *up = p2->p_addr;
 	int foo, offset, addr, i;
@@ -115,7 +115,7 @@ cpu_fork(p1, p2)
 
 #include "npx.h"
 #if NNPX > 0
-extern struct proc *npxproc;
+extern struct process *npxproc;
 #endif
 
 #ifdef notyet
@@ -133,13 +133,13 @@ extern struct proc *npxproc;
  * [The nullpcb allows us to minimize cost in mi_switch() by not having
  * a special case].
  */
-struct proc *switch_to_inactive();
+struct process *switch_to_inactive();
 /* EN: Active definition: releases the coprocessor when p owns it (NNPX), sets curproc = p and mi_switch()es away; vmspace and u area are freed later by cpu_wait(). */
 /* 中文：第二个即实际编译的定义：当 p 占用协处理器时释放它（NNPX），置 curproc = p 后调用 mi_switch 让出 CPU；vmspace 与 u 区由 cpu_wait() 稍后释放。 */
 /* EN: notyet variant only: frees the FPU, switches to an inactive stack, frees vmspace and u area, sets p_addr to nullpcb and mi_switch()es away; never returns. */
 /* 中文：文件中第一个定义，仅在 #ifdef notyet 分支编译：释放浮点协处理器，切到非活动栈后释放 vmspace 与 u 区，把 p_addr 指向 nullpcb 再调用 mi_switch 离开，永不返回。 */
 cpu_exit(p)
-	register struct proc *p;
+	register struct process *p;
 {
 	static struct pcb nullpcb;	/* pcb to overwrite on last switch */
 
@@ -165,7 +165,7 @@ cpu_exit(p)
 /* EN: notyet variant only: frees the FPU, switches to an inactive stack, frees vmspace and u area, sets p_addr to nullpcb and mi_switch()es away; never returns. */
 /* 中文：文件中第一个定义，仅在 #ifdef notyet 分支编译：释放浮点协处理器，切到非活动栈后释放 vmspace 与 u 区，把 p_addr 指向 nullpcb 再调用 mi_switch 离开，永不返回。 */
 cpu_exit(p)
-	register struct proc *p;
+	register struct process *p;
 {
 	
 	/* free coprocessor (if we have it) */
@@ -177,7 +177,7 @@ cpu_exit(p)
 	mi_switch();
 }
 
-cpu_wait(p) struct proc *p; {
+cpu_wait(p) struct process *p; {
 
 	/* drop per-process resources */
 	vmspace_free(p->p_vmspace);
@@ -191,7 +191,7 @@ cpu_wait(p) struct proc *p; {
 /* EN: Writes the process u-area (p->p_addr, ctob(UPAGES) bytes at offset 0) to vnode vp via vn_rdwr with IO_NODELOCKED|IO_UNIT and returns that error. */
 /* 中文：用 vn_rdwr 把进程 u 区（p->p_addr，偏移 0，ctob(UPAGES) 字节）写入 vnode vp，标志 IO_NODELOCKED|IO_UNIT，并返回其错误码。 */
 cpu_coredump(p, vp, cred)
-	struct proc *p;
+	struct process *p;
 	struct vnode *vp;
 	struct ucred *cred;
 {
@@ -274,7 +274,7 @@ prober(addr)
 	register u_int addr;
 {
 	register int page;
-	register struct proc *p;
+	register struct process *p;
 
 	if (addr >= USRSTACK)
 		return(0);
@@ -291,7 +291,7 @@ probew(addr)
 	register u_int addr;
 {
 	register int page;
-	register struct proc *p;
+	register struct process *p;
 
 	if (addr >= USRSTACK)
 		return(0);
@@ -389,7 +389,7 @@ vmapbuf(bp)
 	register int npf;
 	register caddr_t addr;
 	register long flags = bp->b_flags;
-	struct proc *p;
+	struct process *p;
 	int off;
 	vm_offset_t kva;
 	register vm_offset_t pa;

@@ -152,12 +152,12 @@ struct lock {
 #define LK_KERNPROC ((pid_t) -2)
 #define LK_NOPROC ((pid_t) -1)
 
-struct proc;
+struct process;
 
 void	lockinit __P((struct lock *, int prio, char *wmesg, int timo,
 			int flags));
 int	lockmgr __P((__volatile struct lock *, u_int flags,
-			struct simplelock *, struct proc *p));
+			struct simplelock *, struct process *p));
 int	lockstatus __P((struct lock *));
 
 #ifdef DEBUG

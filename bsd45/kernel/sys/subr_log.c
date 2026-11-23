@@ -39,7 +39,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/vnode.h>
 #include <sys/ioctl.h>
 #include <sys/msgbuf.h>
@@ -65,7 +65,7 @@ int
 logopen(dev, flags, mode, p)
 	dev_t dev;
 	int flags, mode;
-	struct proc *p;
+	struct process *p;
 {
 	register struct msgbuf *mbp = msgbufp;
 
@@ -96,7 +96,7 @@ int
 logclose(dev, flag, mode, p)
 	dev_t dev;
 	int flag, mode;
-	struct proc *p;
+	struct process *p;
 {
 
 	log_open = 0;
@@ -159,7 +159,7 @@ int
 logselect(dev, rw, p)
 	dev_t dev;
 	int rw;
-	struct proc *p;
+	struct process *p;
 {
 	int s = splhigh();
 
@@ -182,7 +182,7 @@ logselect(dev, rw, p)
 void
 logwakeup()
 {
-	struct proc *p;
+	struct process *p;
 
 	if (!log_open)
 		return;
@@ -208,7 +208,7 @@ logioctl(dev, com, data, flag, p)
 	u_long com;
 	caddr_t data;
 	int flag;
-	struct proc *p;
+	struct process *p;
 {
 	long l;
 	int s;

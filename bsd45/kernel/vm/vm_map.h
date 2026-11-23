@@ -159,7 +159,7 @@ typedef struct {
  *		Perform locking on the data portion of a map.
  */
 
-#include <sys/proc.h>	/* XXX for curproc and p_pid */
+#include <sys/kprocess.h>	/* XXX for curproc and p_pid */
 
 #define	vm_map_lock_drain_interlock(map) { \
 	lockmgr(&(map)->lock, LK_DRAIN|LK_INTERLOCK, \

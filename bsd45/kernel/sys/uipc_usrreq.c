@@ -35,7 +35,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/filedesc.h>
 #include <sys/domain.h>
 #include <sys/protosw.h>
@@ -72,7 +72,7 @@ uipc_usrreq(so, req, m, nam, control)
 	struct unpcb *unp = sotounpcb(so);
 	register struct socket *so2;
 	register int error = 0;
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 
 	if (req == PRU_CONTROL)
 		return (EOPNOTSUPP);
@@ -391,7 +391,7 @@ int
 unp_bind(unp, nam, p)
 	struct unpcb *unp;
 	struct mbuf *nam;
-	struct proc *p;
+	struct process *p;
 {
 	struct sockaddr_un *soun = mtod(nam, struct sockaddr_un *);
 	register struct vnode *vp;
@@ -441,7 +441,7 @@ int
 unp_connect(so, nam, p)
 	struct socket *so;
 	struct mbuf *nam;
-	struct proc *p;
+	struct process *p;
 {
 	register struct sockaddr_un *soun = mtod(nam, struct sockaddr_un *);
 	register struct vnode *vp;
@@ -625,7 +625,7 @@ int
 unp_externalize(rights)
 	struct mbuf *rights;
 {
-	struct proc *p = curproc;		/* XXX */
+	struct process *p = curproc;		/* XXX */
 	register int i;
 	register struct cmsghdr *cm = mtod(rights, struct cmsghdr *);
 	register struct file **rp = (struct file **)(cm + 1);
@@ -658,7 +658,7 @@ unp_externalize(rights)
 int
 unp_internalize(control, p)
 	struct mbuf *control;
-	struct proc *p;
+	struct process *p;
 {
 	struct filedesc *fdp = p->p_fd;
 	register struct cmsghdr *cm = mtod(control, struct cmsghdr *);
@@ -801,7 +801,7 @@ unp_gc()
 	for (i = nunref, fpp = extra_ref; --i >= 0; ++fpp)
 		sorflush((struct socket *)(*fpp)->f_data);
 	for (i = nunref, fpp = extra_ref; --i >= 0; ++fpp)
-		closef(*fpp, (struct proc *)NULL);
+		closef(*fpp, (struct process *)NULL);
 	free((caddr_t)extra_ref, M_FILE);
 	unp_gcing = 0;
 }
@@ -871,5 +871,5 @@ unp_discard(fp)
 
 	fp->f_msgcount--;
 	unp_rights--;
-	(void) closef(fp, (struct proc *)NULL);
+	(void) closef(fp, (struct process *)NULL);
 }

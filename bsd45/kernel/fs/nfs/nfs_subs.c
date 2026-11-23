@@ -43,7 +43,7 @@
  * copy data between mbuf chains and uio lists.
  */
 #include <sys/param.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/mount.h>
@@ -515,7 +515,7 @@ static short *nfsrv_v3errmap[] = {
 	nfsv3err_commit,
 };
 
-extern struct proc *nfs_iodwant[NFS_MAXASYNCDAEMON];
+extern struct process *nfs_iodwant[NFS_MAXASYNCDAEMON];
 extern struct nfsrtt nfsrtt;
 extern time_t nqnfsstarttime;
 extern int nqsrv_clockskew;
@@ -530,9 +530,9 @@ extern u_long nfsnodehash;
 
 #ifdef VFS_LKM
 struct getfh_args;
-extern int getfh(struct proc *, struct getfh_args *, int *);
+extern int getfh(struct process *, struct getfh_args *, int *);
 struct nfssvc_args;
-extern int nfssvc(struct proc *, struct nfssvc_args *, int *);
+extern int nfssvc(struct process *, struct nfssvc_args *, int *);
 #endif
 
 LIST_HEAD(nfsnodehashhead, nfsnode);
@@ -1119,7 +1119,7 @@ nfs_init(vfsp)
 		nfs_ticks = 1;
 	/* Ensure async daemons disabled */
 	for (i = 0; i < NFS_MAXASYNCDAEMON; i++)
-		nfs_iodwant[i] = (struct proc *)0;
+		nfs_iodwant[i] = (struct process *)0;
 	TAILQ_INIT(&nfs_bufq);
 	nfs_nhinit();			/* Init the nfsnode table */
 	nfsrv_init(0);			/* Init server data structures */
@@ -1367,7 +1367,7 @@ nfs_namei(ndp, fhp, len, slp, nam, mdp, dposp, retdirp, p, kerbflag)
 	struct mbuf **mdp;
 	caddr_t *dposp;
 	struct vnode **retdirp;
-	struct proc *p;
+	struct process *p;
 	int kerbflag;
 {
 	register int i, rem;
@@ -1660,7 +1660,7 @@ nfsrv_fhtovp(fhp, lockflag, vpp, cred, slp, nam, rdonlyp, kerbflag)
 	int *rdonlyp;
 	int kerbflag;
 {
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 	register struct mount *mp;
 	register struct nfsuid *uidp;
 	register int i;

@@ -41,7 +41,7 @@
 #include <sys/time.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <vm/vm.h>
 #include <sys/sysctl.h>
 
@@ -158,7 +158,7 @@ net_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	size_t *oldlenp;
 	void *newp;
 	size_t newlen;
-	struct proc *p;
+	struct process *p;
 {
 	register struct domain *dp;
 	register struct protosw *pr;

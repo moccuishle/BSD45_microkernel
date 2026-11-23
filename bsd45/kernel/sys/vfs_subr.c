@@ -44,7 +44,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/mount.h>
 #include <sys/time.h>
 #include <sys/vnode.h>
@@ -115,7 +115,7 @@ vfs_busy(mp, flags, interlkp, p)
 	struct mount *mp;
 	int flags;
 	struct simplelock *interlkp;
-	struct proc *p;
+	struct process *p;
 {
 	int lkflags;
 
@@ -152,7 +152,7 @@ vfs_busy(mp, flags, interlkp, p)
 void
 vfs_unbusy(mp, p)
 	struct mount *mp;
-	struct proc *p;
+	struct process *p;
 {
 
 	lockmgr(&mp->mnt_lock, LK_RELEASE, NULL, p);
@@ -172,7 +172,7 @@ vfs_rootmountalloc(fstypename, devname, mpp)
 	char *devname;
 	struct mount **mpp;
 {
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 	struct vfsconf *vfsp;
 	struct mount *mp;
 
@@ -309,8 +309,8 @@ vattr_null(vap)
  * Routines having to do with the management of the vnode table.
  */
 extern int (**dead_vnodeop_p)();
-static void vclean __P((struct vnode *vp, int flag, struct proc *p));
-extern void vgonel __P((struct vnode *vp, struct proc *p));
+static void vclean __P((struct vnode *vp, int flag, struct process *p));
+extern void vgonel __P((struct vnode *vp, struct process *p));
 long numvnodes;
 extern struct vattr va_null;
 
@@ -326,7 +326,7 @@ getnewvnode(tag, mp, vops, vpp)
 	int (**vops)();
 	struct vnode **vpp;
 {
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 	struct vnode *vp;
 	int s;
 	int cnt;
@@ -458,7 +458,7 @@ vinvalbuf(vp, flags, cred, p, slpflag, slptimeo)
 	register struct vnode *vp;
 	int flags;
 	struct ucred *cred;
-	struct proc *p;
+	struct process *p;
 	int slpflag, slptimeo;
 {
 	register struct buf *bp;
@@ -652,7 +652,7 @@ checkalias(nvp, nvp_rdev, mp)
 	dev_t nvp_rdev;
 	struct mount *mp;
 {
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 	struct vnode *vp;
 	struct vnode **vpp;
 
@@ -721,7 +721,7 @@ int
 vget(vp, flags, p)
 	struct vnode *vp;
 	int flags;
-	struct proc *p;
+	struct process *p;
 {
 	int error;
 
@@ -767,7 +767,7 @@ vop_nolock(ap)
 	struct vop_lock_args /* {
 		struct vnode *a_vp;
 		int a_flags;
-		struct proc *a_p;
+		struct process *a_p;
 	} */ *ap;
 {
 #ifdef notyet
@@ -835,7 +835,7 @@ vop_nounlock(ap)
 	struct vop_unlock_args /* {
 		struct vnode *a_vp;
 		int a_flags;
-		struct proc *a_p;
+		struct process *a_p;
 	} */ *ap;
 {
 	struct vnode *vp = ap->a_vp;
@@ -889,7 +889,7 @@ void
 vput(vp)
 	struct vnode *vp;
 {
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 
 #ifdef DIGANOSTIC
 	if (vp == NULL)
@@ -928,7 +928,7 @@ void
 vrele(vp)
 	struct vnode *vp;
 {
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 
 #ifdef DIAGNOSTIC
 	if (vp == NULL)
@@ -1011,7 +1011,7 @@ vflush(mp, skipvp, flags)
 	struct vnode *skipvp;
 	int flags;
 {
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 	struct vnode *vp, *nvp;
 	int busy = 0;
 
@@ -1094,7 +1094,7 @@ static void
 vclean(vp, flags, p)
 	struct vnode *vp;
 	int flags;
-	struct proc *p;
+	struct process *p;
 {
 	int active;
 
@@ -1183,7 +1183,7 @@ vop_revoke(ap)
 	} */ *ap;
 {
 	struct vnode *vp, *vq;
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 
 #ifdef DIAGNOSTIC
 	if ((ap->a_flags & REVOKEALL) == 0)
@@ -1245,7 +1245,7 @@ int
 vrecycle(vp, inter_lkp, p)
 	struct vnode *vp;
 	struct simplelock *inter_lkp;
-	struct proc *p;
+	struct process *p;
 {
 
 	simple_lock(&vp->v_interlock);
@@ -1269,7 +1269,7 @@ void
 vgone(vp)
 	struct vnode *vp;
 {
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 
 	simple_lock(&vp->v_interlock);
 	vgonel(vp, p);
@@ -1283,7 +1283,7 @@ vgone(vp)
 void
 vgonel(vp, p)
 	struct vnode *vp;
-	struct proc *p;
+	struct process *p;
 {
 	struct vnode *vq;
 	struct vnode *vx;
@@ -1485,7 +1485,7 @@ vprint(label, vp)
 void
 printlockedvnodes()
 {
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 	struct mount *mp, *nmp;
 	struct vnode *vp;
 
@@ -1523,7 +1523,7 @@ vfs_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	size_t *oldlenp;
 	void *newp;
 	size_t newlen;
-	struct proc *p;
+	struct process *p;
 {
 	struct ctldebug *cdp;
 	struct vfsconf *vfsp;
@@ -1571,7 +1571,7 @@ int
 sysctl_vnode(where, sizep, p)
 	char *where;
 	size_t *sizep;
-	struct proc *p;
+	struct process *p;
 {
 	struct mount *mp, *nmp;
 	struct vnode *nvp, *vp;
@@ -1675,7 +1675,7 @@ void
 vfs_unmountall()
 {
 	struct mount *mp, *nmp;
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 
 	/*
 	 * Since this only runs when rebooting, it is not interlocked.

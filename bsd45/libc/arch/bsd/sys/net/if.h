@@ -66,7 +66,7 @@
  * Forward structure declarations for function prototypes [sic].
  */
 struct	mbuf;
-struct	proc;
+struct	process;
 struct	rtentry;	
 struct	socket;
 struct	ether_header;
@@ -341,7 +341,7 @@ void	ifubareset __P((int));
 #endif
 int	ifconf __P((int, caddr_t));
 void	ifinit __P((void));
-int	ifioctl __P((struct socket *, u_long, caddr_t, struct proc *));
+int	ifioctl __P((struct socket *, u_long, caddr_t, struct process *));
 int	ifpromisc __P((struct ifnet *, int));
 struct	ifnet *ifunit __P((char *));
 

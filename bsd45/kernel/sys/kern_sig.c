@@ -44,7 +44,7 @@
 #include <sys/resourcevar.h>
 #include <sys/namei.h>
 #include <sys/vnode.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/systm.h>
 #include <sys/timeb.h>
 #include <sys/times.h>
@@ -65,7 +65,7 @@
 #include <vm/vm.h>
 #include <sys/user.h>		/* for coredump */
 
-void stop __P((struct proc *p));
+void stop __P((struct process *p));
 
 /*
  * Can process p, with pcred pc, send the signal signum to process q?
@@ -83,7 +83,7 @@ void stop __P((struct proc *p));
 /* EN: System call to examine or set the action for a signal, optionally retrieving the old action before installing the new one */
 int
 sigaction(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct sigaction_args /* {
 		syscallarg(int) signum;
 		syscallarg(struct sigaction *) nsa;
@@ -130,7 +130,7 @@ sigaction(p, uap, retval)
 /* EN: Atomically set a signal's handler vector, catch mask and flags, updating the process's ignore/catch/on-stack state */
 void
 setsigvec(p, signum, sa)
-	register struct proc *p;
+	register struct process *p;
 	int signum;
 	register struct sigaction *sa;
 {
@@ -194,7 +194,7 @@ setsigvec(p, signum, sa)
 /* EN: Initialize signal state for process 0, masking signals whose default action is to ignore them */
 void
 siginit(p)
-	struct proc *p;
+	struct process *p;
 {
 	register int i;
 
@@ -210,7 +210,7 @@ siginit(p)
 /* EN: Reset signal state on exec, restoring caught signals to their default action and resetting the alternate signal stack */
 void
 execsigs(p)
-	register struct proc *p;
+	register struct process *p;
 {
 	register struct sigacts *ps = p->p_sigacts;
 	register int nc, mask;
@@ -251,7 +251,7 @@ execsigs(p)
 /* EN: System call to examine or change the process signal mask as specified, returning the old mask in retval */
 int
 sigprocmask(p, uap, retval)
-	register struct proc *p;
+	register struct process *p;
 	struct sigprocmask_args /* {
 		syscallarg(int) how;
 		syscallarg(sigset_t) mask;
@@ -289,7 +289,7 @@ sigprocmask(p, uap, retval)
 /* EN: System call that returns the set of currently pending (blocked) signals */
 int
 sigpending(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -307,7 +307,7 @@ sigpending(p, uap, retval)
 /* EN: 4.3BSD-compatible generalized signal interface to get or set 4.3-style sigvec handler actions */
 int
 compat_43_sigvec(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_sigvec_args /* {
 		syscallarg(int) signum;
 		syscallarg(struct sigvec *) nsv;
@@ -367,7 +367,7 @@ compat_43_sigvec(p, uap, retval)
 /* EN: 4.3BSD-compatible interface to add the given signals to the process mask and return the old mask */
 int
 compat_43_sigblock(p, uap, retval)
-	register struct proc *p;
+	register struct process *p;
 	struct compat_43_sigblock_args /* {
 		syscallarg(int) mask;
 	} */ *uap;
@@ -385,7 +385,7 @@ compat_43_sigblock(p, uap, retval)
 /* EN: 4.3BSD-compatible interface to set the process signal mask to the given value and return the old mask */
 int
 compat_43_sigsetmask(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct compat_43_sigsetmask_args /* {
 		syscallarg(int) mask;
 	} */ *uap;
@@ -410,7 +410,7 @@ compat_43_sigsetmask(p, uap, retval)
 /* EN: System call to wait for a signal with a temporary mask, restoring the old mask and returning EINTR when a signal arrives */
 int
 sigsuspend(p, uap, retval)
-	register struct proc *p;
+	register struct process *p;
 	struct sigsuspend_args /* {
 		syscallarg(int) mask;
 	} */ *uap;
@@ -440,7 +440,7 @@ sigsuspend(p, uap, retval)
 /* EN: 4.3BSD-compatible interface to get or set the process's 4.3-style alternate signal stack */
 int
 compat_43_sigstack(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_sigstack_args /* {
 		syscallarg(struct sigstack *) nss;
 		syscallarg(struct sigstack *) oss;
@@ -473,7 +473,7 @@ compat_43_sigstack(p, uap, retval)
 /* EN: System call to get or set the process's alternate signal stack, checking the minimum size and disable flag */
 int
 sigaltstack(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct sigaltstack_args /* {
 		syscallarg(struct sigaltstack *) nss;
 		syscallarg(struct sigaltstack *) oss;
@@ -514,14 +514,14 @@ sigaltstack(p, uap, retval)
 /* EN: System call to send a signal to a single process, a process group, or all processes, subject to CANSIGNAL permission checks */
 int
 kill(cp, uap, retval)
-	register struct proc *cp;
+	register struct process *cp;
 	register struct kill_args /* {
 		syscallarg(int) pid;
 		syscallarg(int) signum;
 	} */ *uap;
 	register_t *retval;
 {
-	register struct proc *p;
+	register struct process *p;
 	register struct pcred *pc = cp->p_cred;
 
 	if ((u_int)SCARG(uap, signum) >= NSIG)
@@ -553,7 +553,7 @@ kill(cp, uap, retval)
 /* EN: 4.3BSD-compatible system call to send a signal to a specified process group */
 int
 compat_43_killpg(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_killpg_args /* {
 		syscallarg(int) pgid;
 		syscallarg(int) signum;
@@ -575,10 +575,10 @@ compat_43_killpg(p, uap, retval)
 /* EN: Common implementation for kill, sending a signal to a process group or all processes; all selects broadcast, otherwise pgid locates the group */
 int
 killpg1(cp, signum, pgid, all)
-	register struct proc *cp;
+	register struct process *cp;
 	int signum, pgid, all;
 {
-	register struct proc *p;
+	register struct process *p;
 	register struct pcred *pc = cp->p_cred;
 	struct pgrp *pgrp;
 	int nfound = 0;
@@ -646,7 +646,7 @@ pgsignal(pgrp, signum, checkctty)
 	struct pgrp *pgrp;
 	int signum, checkctty;
 {
-	register struct proc *p;
+	register struct process *p;
 
 	if (pgrp)
 		for (p = pgrp->pg_members.lh_first; p != 0;
@@ -664,7 +664,7 @@ pgsignal(pgrp, signum, checkctty)
 /* EN: Send a trap-induced signal to a process, delivering it immediately with the correct code if catchable, otherwise posting it normally */
 void
 trapsignal(p, signum, code)
-	struct proc *p;
+	struct process *p;
 	register int signum;
 	u_long code;
 {
@@ -706,7 +706,7 @@ trapsignal(p, signum, code)
 /* EN: Post a signal to a process, handling ignore/block/stop/continue semantics and waking or stopping the process according to its state */
 void
 psignal(p, signum)
-	register struct proc *p;
+	register struct process *p;
 	register int signum;
 {
 	register int s, prop;
@@ -915,7 +915,7 @@ out:
 /* EN: Check for an unblocked pending signal for a process, handling tracing and default actions, returning the signal number to deliver or 0 */
 int
 issignal(p)
-	register struct proc *p;
+	register struct process *p;
 {
 	register int signum, mask, prop;
 
@@ -1066,7 +1066,7 @@ issignal(p)
 /* EN: Put a process into the stopped state, clear the P_WAITED flag, and notify its parent via wakeup */
 void
 stop(p)
-	register struct proc *p;
+	register struct process *p;
 {
 
 	p->p_stat = SSTOP;
@@ -1084,7 +1084,7 @@ void
 postsig(signum)
 	register int signum;
 {
-	register struct proc *p = curproc;
+	register struct process *p = curproc;
 	register struct sigacts *ps = p->p_sigacts;
 	register sig_t action;
 	u_long code;
@@ -1154,7 +1154,7 @@ postsig(signum)
 /* EN: Log an error and notify the user, then kill the process by sending SIGKILL */
 void
 killproc(p, why)
-	struct proc *p;
+	struct process *p;
 	char *why;
 {
 
@@ -1175,7 +1175,7 @@ killproc(p, why)
 /* EN: Force a process to exit due to a signal, dumping core if appropriate and marking accounting, then calling exit1 without returning */
 void
 sigexit(p, signum)
-	register struct proc *p;
+	register struct process *p;
 	int signum;
 {
 
@@ -1197,7 +1197,7 @@ sigexit(p, signum)
 /* EN: Dump the process's memory image to a file named "progname.core", failing for setuid/setgid processes or when over the core limit */
 int
 coredump(p)
-	register struct proc *p;
+	register struct process *p;
 {
 	register struct vnode *vp;
 	register struct pcred *pcred = p->p_cred;
@@ -1231,7 +1231,7 @@ coredump(p)
 	VOP_LEASE(vp, p, cred, LEASE_WRITE);
 	VOP_SETATTR(vp, &vattr, cred, p);
 	p->p_acflag |= ACORE;
-	bcopy(p, &p->p_addr->u_kproc.kp_proc, sizeof(struct proc));
+	bcopy(p, &p->p_addr->u_kproc.kp_proc, sizeof(struct process));
 	fill_eproc(p, &p->p_addr->u_kproc.kp_eproc);
 	error = cpu_coredump(p, vp, cred);
 	if (error == 0)
@@ -1261,7 +1261,7 @@ out:
 /* EN: Handler for nonexistent system calls, sending SIGSYS to the process and returning ENOSYS to flag the error in case the signal is not seen immediately */
 int
 nosys(p, args, retval)
-	struct proc *p;
+	struct process *p;
 	void *args;
 	register_t *retval;
 {

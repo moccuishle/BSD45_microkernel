@@ -35,7 +35,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/file.h>
 #include <sys/mbuf.h>
 #include <sys/protosw.h>
@@ -85,7 +85,7 @@ soo_ioctl(fp, cmd, data, p)
 	struct file *fp;
 	u_long cmd;
 	register caddr_t data;
-	struct proc *p;
+	struct process *p;
 {
 	register struct socket *so = (struct socket *)fp->f_data;
 
@@ -145,7 +145,7 @@ int
 soo_select(fp, which, p)
 	struct file *fp;
 	int which;
-	struct proc *p;
+	struct process *p;
 {
 	register struct socket *so = (struct socket *)fp->f_data;
 	register int s = splnet();
@@ -204,7 +204,7 @@ soo_stat(so, ub)
 int
 soo_close(fp, p)
 	struct file *fp;
-	struct proc *p;
+	struct process *p;
 {
 	int error = 0;
 

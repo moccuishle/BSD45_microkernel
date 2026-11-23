@@ -237,7 +237,7 @@ int	 bpfclose __P((dev_t, int));
 int	 bpfread __P((dev_t, struct uio *));
 int	 bpfwrite __P((dev_t, struct uio *));
 int	 bpfioctl __P((dev_t, u_long, caddr_t, int));
-int	 bpf_select __P((dev_t, int, struct proc *));
+int	 bpf_select __P((dev_t, int, struct process *));
 void	 bpf_tap __P((caddr_t, u_char *, u_int));
 void	 bpf_mtap __P((caddr_t, struct mbuf *));
 void	 bpfattach __P((caddr_t *, struct ifnet *, u_int, u_int));

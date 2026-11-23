@@ -21,8 +21,8 @@ handler 发起 IPC 后把**续传状态**存进 `proc`，阻塞并交出 CPU；�
 | 组成 | 位置 |
 |---|---|
 | 协议常量（镜像 `libc/include/srv.h`） | `kernel/include/sys/srvproto.h`（新增） |
-| 续传状态 | `struct proc`：`uk_kvfs_waiting/op/buf/len/handle` |
-| per-process 虚拟 fd 表 | `struct proc`：`uk_kvfs_fds[8]`，基址 `0x4000`（内核 fd 是 `0..NFD-1`，不冲突） |
+| 续传状态 | `struct process`：`uk_kvfs_waiting/op/buf/len/handle` |
+| per-process 虚拟 fd 表 | `struct process`：`uk_kvfs_fds[8]`，基址 `0x4000`（内核 fd 是 `0..NFD-1`，不冲突） |
 | 发起转发 + 阻塞 | `kvfs_forward()`（`kernel/sys/usermode.c`） |
 | 回复回填 + 唤醒 | `kvfs_reply_deliver()`，挂在 `SYS_IPC_SEND` 的钩子上 |
 | 拦截点 | `SYS_open`（前缀）、`SYS_read/write`（虚拟 fd）、`SYS_close` |
@@ -186,7 +186,7 @@ $env:PATH = "C:\Users\Administrator\.workbuddy\binaries\python\versions\3.13.12;
 **修改（S404 内核态转发）**
 - `kernel/sys/usermode.c`（`kvfs_forward` / `kvfs_reply_deliver` / open·read·write·close 拦截 /
   `ipc_fail_waiters` 的 EIO / `kthread_block_tcb` 单线程阻塞修复）
-- `kernel/include/sys/proc.h`（`uk_kvfs_*` 续传字段 + `uk_kvfs_fds[]`）
+- `kernel/include/sys/kprocess.h`（`uk_kvfs_*` 续传字段 + `uk_kvfs_fds[]`）
 - `kernel/arch/i386/usermode_asm.s`（`resume_user` 的 `%dx` 破坏用户 `edx` 修复）
 - `kernel/thread/kipc.c`、`kernel/include/sys/kipc.h`（`port_owner()`）
 - `libc/src/libc_sys.c`（撤回 /srv/ 拦截，恢复纯 syscall 包装）

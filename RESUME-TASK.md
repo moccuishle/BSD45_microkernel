@@ -118,7 +118,7 @@ usermode usermode_asm embed pccon stubs glue mon atapi isofs tmpfs vfs`。
 
 这些 4.5BSD 文件是冲着 **4.5BSD 内核核心**写的：缓冲区（`struct buf`、
 `bufqueues`、`bdevsw->d_strategy`）、vnode（`v_id`、`VOP_*`、`vnode_if.h`）、
-进程/凭证（`struct proc`、`ucred`、`uio`）、同步/内存（`sleep/wakeup`、
+进程/凭证（`struct process`、`ucred`、`uio`）、同步/内存（`sleep/wakeup`、
 `M_CACHE`、`copyin/copyout`）。本端口有意简化了这些，所以缺的不是一行
 `obj-y`，而是一整套内核核心。
 

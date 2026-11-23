@@ -45,7 +45,7 @@ static char sccsid[] = "@(#)genassym.c	8.2 (Berkeley) 9/23/93";
 #include <sys/param.h>
 #include <sys/buf.h>
 #include <sys/map.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/mbuf.h>
 #include <sys/msgbuf.h>
 #include <machine/cpu.h>
@@ -60,7 +60,7 @@ static char sccsid[] = "@(#)genassym.c	8.2 (Berkeley) 9/23/93";
 /* 中文：主机端 genassym 程序：为汇编源码打印 #define 行，输出结构体字段偏移、大小及标志值，最后调用 exit(0)。 */
 main()
 {
-	struct proc *p = (struct proc *)0;
+	struct process *p = (struct process *)0;
 	struct vmmeter *vm = (struct vmmeter *)0;
 	struct user *up = (struct user *)0;
 	struct rusage *rup = (struct rusage *)0;

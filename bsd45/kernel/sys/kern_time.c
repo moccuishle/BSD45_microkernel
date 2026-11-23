@@ -37,7 +37,7 @@
 #include <sys/resourcevar.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/vnode.h>
 
 #include <sys/mount.h>
@@ -60,7 +60,7 @@
 /* EN: Implement the gettimeofday system call: copy the current time (and timezone when requested) back to user space */
 int
 gettimeofday(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct gettimeofday_args /* {
 		syscallarg(struct timeval *) tp;
 		syscallarg(struct timezone *) tzp;
@@ -87,7 +87,7 @@ gettimeofday(p, uap, retval)
 /* EN: Implement the settimeofday system call: restricted to the superuser, copy in and validate all parameters before updating system time and timezone */
 int
 settimeofday(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct settimeofday_args /* {
 		syscallarg(struct timeval *) tv;
 		syscallarg(struct timezone *) tzp;
@@ -148,7 +148,7 @@ long	bigadj = 1000000;		/* use 10x skew above bigadj us. */
 /* EN: Implement the adjtime system call: slew the system time gradually and return the previous unfinished adjustment */
 int
 adjtime(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct adjtime_args /* {
 		syscallarg(struct timeval *) delta;
 		syscallarg(struct timeval *) olddelta;
@@ -228,7 +228,7 @@ adjtime(p, uap, retval)
 /* EN: Implement the getitimer system call: read the current value of the selected interval timer (real/virtual/profiling) and return it to userland */
 int
 getitimer(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct getitimer_args /* {
 		syscallarg(u_int) which;
 		syscallarg(struct itimerval *) itv;
@@ -267,7 +267,7 @@ getitimer(p, uap, retval)
 /* EN: Implement the setitimer system call: set the current value and interval of the selected timer and return the old value */
 int
 setitimer(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct setitimer_args /* {
 		syscallarg(u_int) which;
 		syscallarg(struct itimerval *) itv;
@@ -320,10 +320,10 @@ void
 realitexpire(arg)
 	void *arg;
 {
-	register struct proc *p;
+	register struct process *p;
 	int s;
 
-	p = (struct proc *)arg;
+	p = (struct process *)arg;
 	psignal(p, SIGALRM);
 	if (!timerisset(&p->p_realtimer.it_interval)) {
 		timerclear(&p->p_realtimer.it_value);

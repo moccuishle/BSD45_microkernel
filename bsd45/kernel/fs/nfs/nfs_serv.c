@@ -58,7 +58,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/file.h>
 #include <sys/namei.h>
 #include <sys/vnode.h>
@@ -100,7 +100,7 @@ int
 nfsrv3_access(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -169,7 +169,7 @@ int
 nfsrv_getattr(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -217,7 +217,7 @@ int
 nfsrv_setattr(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -350,7 +350,7 @@ int
 nfsrv_lookup(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -427,7 +427,7 @@ int
 nfsrv_readlink(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -484,7 +484,7 @@ nfsrv_readlink(nfsd, slp, procp, mrq)
 	uiop->uio_resid = len;
 	uiop->uio_rw = UIO_READ;
 	uiop->uio_segflg = UIO_SYSSPACE;
-	uiop->uio_procp = (struct proc *)0;
+	uiop->uio_procp = (struct process *)0;
 	if (error = nfsrv_fhtovp(fhp, 1, &vp, cred, slp, nam,
 		 &rdonly, (nfsd->nd_flag & ND_KERBAUTH))) {
 		m_freem(mp3);
@@ -532,7 +532,7 @@ int
 nfsrv_read(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -699,7 +699,7 @@ int
 nfsrv_write(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -840,7 +840,7 @@ nfsrv_write(nfsd, slp, procp, mrq)
 	    uiop->uio_resid = len;
 	    uiop->uio_rw = UIO_WRITE;
 	    uiop->uio_segflg = UIO_SYSSPACE;
-	    uiop->uio_procp = (struct proc *)0;
+	    uiop->uio_procp = (struct process *)0;
 	    uiop->uio_offset = off;
 	    error = VOP_WRITE(vp, uiop, ioflags, cred);
 	    nfsstats.srvvop_writes++;
@@ -889,7 +889,7 @@ int
 nfsrv_writegather(ndp, slp, procp, mrq)
 	struct nfsrv_descript **ndp;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	register struct iovec *ivp;
@@ -1083,7 +1083,7 @@ loop1:
 		    ioflags = (IO_METASYNC | IO_SYNC | IO_NODELOCKED);
 		uiop->uio_rw = UIO_WRITE;
 		uiop->uio_segflg = UIO_SYSSPACE;
-		uiop->uio_procp = (struct proc *)0;
+		uiop->uio_procp = (struct process *)0;
 		uiop->uio_offset = nfsd->nd_off;
 		uiop->uio_resid = nfsd->nd_eoff - nfsd->nd_off;
 		if (uiop->uio_resid > 0) {
@@ -1290,7 +1290,7 @@ int
 nfsrv_create(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -1527,7 +1527,7 @@ int
 nfsrv_mknod(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -1680,7 +1680,7 @@ int
 nfsrv_remove(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -1768,7 +1768,7 @@ int
 nfsrv_rename(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -1975,7 +1975,7 @@ int
 nfsrv_link(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -2074,7 +2074,7 @@ int
 nfsrv_symlink(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -2131,7 +2131,7 @@ nfsrv_symlink(nfsd, slp, procp, mrq)
 	io.uio_iovcnt = 1;
 	io.uio_segflg = UIO_SYSSPACE;
 	io.uio_rw = UIO_READ;
-	io.uio_procp = (struct proc *)0;
+	io.uio_procp = (struct process *)0;
 	nfsm_mtouio(&io, len2);
 	if (!v3) {
 		nfsm_dissect(sp, struct nfsv2_sattr *, NFSX_V2SATTR);
@@ -2219,7 +2219,7 @@ int
 nfsrv_mkdir(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -2337,7 +2337,7 @@ int
 nfsrv_rmdir(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -2468,7 +2468,7 @@ int
 nfsrv_readdir(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -2546,7 +2546,7 @@ again:
 	io.uio_resid = fullsiz;
 	io.uio_segflg = UIO_SYSSPACE;
 	io.uio_rw = UIO_READ;
-	io.uio_procp = (struct proc *)0;
+	io.uio_procp = (struct process *)0;
 	eofflag = 0;
 	if (cookies) {
 		free((caddr_t)cookies, M_TEMP);
@@ -2718,7 +2718,7 @@ int
 nfsrv_readdirplus(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -2792,7 +2792,7 @@ again:
 	io.uio_resid = fullsiz;
 	io.uio_segflg = UIO_SYSSPACE;
 	io.uio_rw = UIO_READ;
-	io.uio_procp = (struct proc *)0;
+	io.uio_procp = (struct process *)0;
 	eofflag = 0;
 	if (cookies) {
 		free((caddr_t)cookies, M_TEMP);
@@ -3002,7 +3002,7 @@ int
 nfsrv_commit(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -3065,7 +3065,7 @@ int
 nfsrv_statfs(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -3145,7 +3145,7 @@ int
 nfsrv_fsinfo(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -3217,7 +3217,7 @@ int
 nfsrv_pathconf(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -3289,7 +3289,7 @@ int
 nfsrv_null(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -3318,7 +3318,7 @@ int
 nfsrv_noop(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -3359,7 +3359,7 @@ nfsrv_access(vp, flags, cred, rdonly, p)
 	int flags;
 	register struct ucred *cred;
 	int rdonly;
-	struct proc *p;
+	struct process *p;
 {
 	struct vattr vattr;
 	int error;

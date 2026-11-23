@@ -13,7 +13,7 @@ $(shell mkdir -p ${include_sys_OBJ_DIR})
 CPPFLAGS := $(CPPFLAGS) -I$(MAKEFILE_DIR_include_sys_mk)
 
 # ---- NOT BUILT: source inventory (reference only) ----
-# headers: acct.h buf.h callout.h cdefs.h clist.h conf.h device.h dir.h dirent.h disk.h disklabel.h dkbad.h dkstat.h dmap.h domain.h errno.h exec.h fbio.h fcntl.h file.h filedesc.h filio.h gmon.h ioccom.h ioctl.h ioctl_compat.h ipc.h kernel.h kproc.h ktrace.h lock.h malloc.h map.h mbuf.h mman.h mount.h msgbuf.h mtio.h namei.h param.h platform.h proc.h protosw.h ptrace.h queue.h reboot.h resource.h resourcevar.h select.h signal.h signalvar.h smp.h socket.h socketvar.h sockio.h stat.h syscall.h syscallargs.h sysctl.h syslimits.h syslog.h systm.h tablet.h termios.h time.h timeb.h times.h tprintf.h trace.h tty.h ttychars.h ttycom.h ttydefaults.h ttydev.h types.h ucred.h uio.h un.h unistd.h unpcb.h user.h utsname.h vadvise.h vcmd.h vlimit.h vmmeter.h vnode.h vsio.h wait.h
+# headers: acct.h buf.h callout.h cdefs.h clist.h conf.h device.h dir.h dirent.h disk.h disklabel.h dkbad.h dkstat.h dmap.h domain.h errno.h exec.h fbio.h fcntl.h file.h filedesc.h filio.h gmon.h ioccom.h ioctl.h ioctl_compat.h ipc.h kernel.h kproc.h ktrace.h lock.h malloc.h map.h mbuf.h mman.h mount.h msgbuf.h mtio.h namei.h param.h platform.h kprocess.h protosw.h ptrace.h queue.h reboot.h resource.h resourcevar.h select.h signal.h signalvar.h smp.h socket.h socketvar.h sockio.h stat.h syscall.h syscallargs.h sysctl.h syslimits.h syslog.h systm.h tablet.h termios.h time.h timeb.h times.h tprintf.h trace.h tty.h ttychars.h ttycom.h ttydefaults.h ttydev.h types.h ucred.h uio.h un.h unistd.h unpcb.h user.h utsname.h vadvise.h vcmd.h vlimit.h vmmeter.h vnode.h vsio.h wait.h
 
 include_sys_OBJS :=
 

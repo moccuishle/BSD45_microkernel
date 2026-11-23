@@ -39,7 +39,7 @@
  */
 
 #include <sys/param.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/errno.h>
 
 /*
@@ -54,7 +54,7 @@ struct ptrace_args {
 /* 中文：进程调试系统调用入口：函数体已删除，直接返回 ENOSYS 表示 ptrace 未实现 */
 /* EN: Process-tracing system call entry: body removed, returns ENOSYS to indicate ptrace is not implemented */
 ptrace(a1, a2, a3)
-	struct proc *a1;
+	struct process *a1;
 	struct ptrace_args *a2;
 	int *a3;
 {
@@ -68,7 +68,7 @@ ptrace(a1, a2, a3)
 /* 中文：跟踪请求辅助函数：函数体已删除，直接返回 0 */
 /* EN: Trace-request helper: body removed, returns 0 directly */
 trace_req(a1)
-	struct proc *a1;
+	struct process *a1;
 {
 
 	/*

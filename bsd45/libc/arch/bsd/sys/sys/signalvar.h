@@ -149,17 +149,17 @@ int sigprop[NSIG + 1] = {
 /*
  * Machine-independent functions:
  */
-int	coredump __P((struct proc *p));
-void	execsigs __P((struct proc *p));
+int	coredump __P((struct process *p));
+void	execsigs __P((struct process *p));
 void	gsignal __P((int pgid, int sig));
-int	issignal __P((struct proc *p));
+int	issignal __P((struct process *p));
 void	pgsignal __P((struct pgrp *pgrp, int sig, int checkctty));
 void	postsig __P((int sig));
-void	psignal __P((struct proc *p, int sig));
-void	setsigvec __P((struct proc *p, int signum, struct sigaction *sa));
-void	sigexit __P((struct proc *p, int signum));
-void	siginit __P((struct proc *p));
-void	trapsignal __P((struct proc *p, int sig, u_long code));
+void	psignal __P((struct process *p, int sig));
+void	setsigvec __P((struct process *p, int signum, struct sigaction *sa));
+void	sigexit __P((struct process *p, int signum));
+void	siginit __P((struct process *p));
+void	trapsignal __P((struct process *p, int sig, u_long code));
 
 /*
  * Machine-dependent functions:

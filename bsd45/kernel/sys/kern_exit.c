@@ -42,7 +42,7 @@
 #include <sys/systm.h>
 #include <sys/map.h>
 #include <sys/ioctl.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/tty.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -65,8 +65,8 @@
 #include <vm/vm.h>
 #include <vm/vm_kern.h>
 
-__dead void cpu_exit __P((struct proc *));
-__dead void exit1 __P((struct proc *, int));
+__dead void cpu_exit __P((struct process *));
+__dead void exit1 __P((struct process *, int));
 
 /*
  * exit --
@@ -79,7 +79,7 @@ struct rexit_args {
 /* EN: The exit system call: terminate the current process by calling exit1 with the given exit status */
 __dead void
 exit(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct rexit_args *uap;
 	int *retval;
 {
@@ -97,11 +97,11 @@ exit(p, uap, retval)
 /* EN: Core process-exit implementation: release address space and resources, become a zombie, save status and rusage, reparent children to init and notify the parent */
 __dead void
 exit1(p, rv)
-	register struct proc *p;
+	register struct process *p;
 	int rv;
 {
-	register struct proc *q, *nq;
-	register struct proc **pp;
+	register struct process *q, *nq;
+	register struct process **pp;
 	register struct vmspace *vm;
 
 	if (p->p_pid == 1)
@@ -284,7 +284,7 @@ struct wait_args {
 /* 中文：4.3BSD 兼容的 wait 入口：从寄存器取出参数填入 wait_args 后转交 wait1 处理 */
 /* EN: 4.3BSD-compatible wait syscall entry: take arguments from registers into wait_args and pass them to wait1 */
 compat_43_wait(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct wait_args *uap;
 	int *retval;
 {
@@ -310,7 +310,7 @@ compat_43_wait(p, uap, retval)
 /* 中文：wait4 系统调用入口：设置 compat 标志为 0 后转交 wait1 处理 */
 /* EN: The wait4 syscall entry: set the compat flag to 0 and pass the request to wait1 */
 wait4(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct wait_args *uap;
 	int *retval;
 {
@@ -326,12 +326,12 @@ wait4(p, uap, retval)
 /* EN: Wait for a child's state change: find a matching child, reap a zombie or report a stop, sleeping when needed if none matches */
 int
 wait1(q, uap, retval)
-	register struct proc *q;
+	register struct process *q;
 	register struct wait_args *uap;
 	int retval[];
 {
 	register int nfound;
-	register struct proc *p, *t;
+	register struct process *p, *t;
 	int status, error;
 
 	if (uap->pid == 0)
@@ -452,8 +452,8 @@ loop:
 /* EN: Reparent a child process to a new parent, updating the sibling list and the p_pptr pointer */
 void
 proc_reparent(child, parent)
-	register struct proc *child;
-	register struct proc *parent;
+	register struct process *child;
+	register struct process *parent;
 {
 
 	if (child->p_pptr == parent)

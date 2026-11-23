@@ -209,7 +209,7 @@ int	nfs_update __P((struct vop_update_args *));
 /* other stuff */
 int	nfs_removeit __P((struct sillyrename *));
 int	nfs_nget __P((struct mount *,nfsfh_t *,int,struct nfsnode **));
-int	nfs_lookitup __P((struct vnode *,char *,int,struct ucred *,struct proc *,struct nfsnode **));
+int	nfs_lookitup __P((struct vnode *,char *,int,struct ucred *,struct process *,struct nfsnode **));
 int	nfs_sillyrename __P((struct vnode *,struct vnode *,struct componentname *));
 nfsuint64 *nfs_getcookie __P((struct nfsnode *, off_t, int));
 void nfs_invaldir __P((struct vnode *));

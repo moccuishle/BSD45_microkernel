@@ -1,13 +1,13 @@
 /*
  * Copyright (c) 2026 jialiang.  All rights reserved.
  *
- * kproc.h - types for the kernel-mode process model.  A struct proc owns its
+ * kproc.h - types for the kernel-mode process model.  A struct process owns its
  * address space, resources and a list of kernel threads (KLT); threads, not
  * processes, are the unit of scheduling, and all threads of one process share
  * its page directory.
  *
- * The runtime field definitions live directly in struct proc (proc.h) so
- * usermode.c uses struct proc directly.  This header provides the
+ * The runtime field definitions live directly in struct process (kprocess.h) so
+ * usermode.c uses struct process directly.  This header provides the
  * supporting types for the kernel process model.
  */
 #ifndef _SYS_KPROC_H_

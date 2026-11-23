@@ -39,7 +39,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/mount.h>
 #include <sys/namei.h>
 #include <sys/vnode.h>
@@ -112,7 +112,7 @@ nfs_nget(mntp, fhp, fhsize, npp)
 	int fhsize;
 	struct nfsnode **npp;
 {
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 	struct nfsnode *np;
 	struct nfsnodehashhead *nhpp;
 	register struct vnode *vp;
@@ -162,12 +162,12 @@ int
 nfs_inactive(ap)
 	struct vop_inactive_args /* {
 		struct vnode *a_vp;
-		struct proc *a_p;
+		struct process *a_p;
 	} */ *ap;
 {
 	register struct nfsnode *np;
 	register struct sillyrename *sp;
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 	extern int prtactive;
 
 	np = VTONFS(ap->a_vp);

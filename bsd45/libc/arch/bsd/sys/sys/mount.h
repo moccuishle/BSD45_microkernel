@@ -228,18 +228,18 @@ struct mbuf;
 
 struct vfsops {
 	int	(*vfs_mount)	__P((struct mount *mp, char *path, caddr_t data,
-				    struct nameidata *ndp, struct proc *p));
+				    struct nameidata *ndp, struct process *p));
 	int	(*vfs_start)	__P((struct mount *mp, int flags,
-				    struct proc *p));
+				    struct process *p));
 	int	(*vfs_unmount)	__P((struct mount *mp, int mntflags,
-				    struct proc *p));
+				    struct process *p));
 	int	(*vfs_root)	__P((struct mount *mp, struct vnode **vpp));
 	int	(*vfs_quotactl)	__P((struct mount *mp, int cmds, uid_t uid,
-				    caddr_t arg, struct proc *p));
+				    caddr_t arg, struct process *p));
 	int	(*vfs_statfs)	__P((struct mount *mp, struct statfs *sbp,
-				    struct proc *p));
+				    struct process *p));
 	int	(*vfs_sync)	__P((struct mount *mp, int waitfor,
-				    struct ucred *cred, struct proc *p));
+				    struct ucred *cred, struct process *p));
 	int	(*vfs_vget)	__P((struct mount *mp, ino_t ino,
 				    struct vnode **vpp));
 	int	(*vfs_fhtovp)	__P((struct mount *mp, struct fid *fhp,
@@ -248,7 +248,7 @@ struct vfsops {
 	int	(*vfs_vptofh)	__P((struct vnode *vp, struct fid *fhp));
 	int	(*vfs_init)	__P((struct vfsconf *));
 	int	(*vfs_sysctl)	__P((int *, u_int, void *, size_t *, void *,
-				    size_t, struct proc *));
+				    size_t, struct process *));
 };
 
 #define VFS_MOUNT(MP, PATH, DATA, NDP, P) \
@@ -284,7 +284,7 @@ struct netexport {
 /*
  * exported vnode operations
  */
-int	vfs_busy __P((struct mount *, int, struct simplelock *, struct proc *));
+int	vfs_busy __P((struct mount *, int, struct simplelock *, struct process *));
 int	vfs_export __P((struct mount *, struct netexport *,
 	    struct export_args *));
 struct	netcred *vfs_export_lookup __P((struct mount *, struct netexport *,
@@ -294,7 +294,7 @@ struct	mount *vfs_getvfs __P((fsid_t *));
 int	vfs_mountedon __P((struct vnode *));
 int	vfs_mountroot __P((void));
 int	vfs_rootmountalloc __P((char *, char *, struct mount **));
-void	vfs_unbusy __P((struct mount *, struct proc *));
+void	vfs_unbusy __P((struct mount *, struct process *));
 void	vfs_unmountall __P((void));
 extern	CIRCLEQ_HEAD(mntlist, mount) mountlist;
 extern	struct simplelock mountlist_slock;

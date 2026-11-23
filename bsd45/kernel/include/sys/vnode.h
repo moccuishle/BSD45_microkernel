@@ -387,7 +387,7 @@ struct file;
 struct mount;
 struct nameidata;
 struct ostat;
-struct proc;
+struct process;
 struct stat;
 struct ucred;
 struct uio;
@@ -403,27 +403,27 @@ void	insmntque __P((struct vnode *vp, struct mount *mp));
 void 	vattr_null __P((struct vattr *vap));
 int 	vcount __P((struct vnode *vp));
 int	vflush __P((struct mount *mp, struct vnode *skipvp, int flags));
-int 	vget __P((struct vnode *vp, int lockflag, struct proc *p));
+int 	vget __P((struct vnode *vp, int lockflag, struct process *p));
 void 	vgone __P((struct vnode *vp));
 int	vinvalbuf __P((struct vnode *vp, int save, struct ucred *cred,
-	    struct proc *p, int slpflag, int slptimeo));
+	    struct process *p, int slpflag, int slptimeo));
 void	vprint __P((char *label, struct vnode *vp));
 int	vrecycle __P((struct vnode *vp, struct simplelock *inter_lkp,
-	    struct proc *p));
+	    struct process *p));
 int	vn_bwrite __P((struct vop_bwrite_args *ap));
 int 	vn_close __P((struct vnode *vp,
-	    int flags, struct ucred *cred, struct proc *p));
-int 	vn_closefile __P((struct file *fp, struct proc *p));
+	    int flags, struct ucred *cred, struct process *p));
+int 	vn_closefile __P((struct file *fp, struct process *p));
 int	vn_ioctl __P((struct file *fp, u_long com, caddr_t data,
-	    struct proc *p));
-int	vn_lock __P((struct vnode *vp, int flags, struct proc *p));
+	    struct process *p));
+int	vn_lock __P((struct vnode *vp, int flags, struct process *p));
 int 	vn_open __P((struct nameidata *ndp, int fmode, int cmode));
 int 	vn_rdwr __P((enum uio_rw rw, struct vnode *vp, caddr_t base,
 	    int len, off_t offset, enum uio_seg segflg, int ioflg,
-	    struct ucred *cred, int *aresid, struct proc *p));
+	    struct ucred *cred, int *aresid, struct process *p));
 int	vn_read __P((struct file *fp, struct uio *uio, struct ucred *cred));
-int	vn_select __P((struct file *fp, int which, struct proc *p));
-int	vn_stat __P((struct vnode *vp, struct stat *sb, struct proc *p));
+int	vn_select __P((struct file *fp, int which, struct process *p));
+int	vn_stat __P((struct vnode *vp, struct stat *sb, struct process *p));
 int	vn_write __P((struct file *fp, struct uio *uio, struct ucred *cred));
 int	vop_noislocked __P((struct vop_islocked_args *));
 int	vop_nolock __P((struct vop_lock_args *));

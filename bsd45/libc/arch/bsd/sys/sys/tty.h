@@ -191,7 +191,7 @@ int	 tputchar __P((int c, struct tty *tp));
 int	 ttioctl __P((struct tty *tp, u_long com, void *data, int flag));
 int	 ttread __P((struct tty *tp, struct uio *uio, int flag));
 void	 ttrstrt __P((void *tp));
-int	 ttselect __P((dev_t device, int rw, struct proc *p));
+int	 ttselect __P((dev_t device, int rw, struct process *p));
 void	 ttsetwater __P((struct tty *tp));
 int	 ttspeedtab __P((int speed, struct speedtab *table));
 int	 ttstart __P((struct tty *tp));

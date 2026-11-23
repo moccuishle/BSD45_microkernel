@@ -37,7 +37,7 @@
 #include <sys/systm.h>
 #include <sys/buf.h>
 #include <sys/conf.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/namei.h>
 #include <sys/dmap.h>		/* XXX */
 #include <sys/vnode.h>
@@ -70,7 +70,7 @@ swapinit()
 {
 	register int i;
 	register struct buf *sp = swbuf;
-	register struct proc *p = &proc0;	/* XXX */
+	register struct process *p = &proc0;	/* XXX */
 	struct swdevt *swp;
 	int error;
 
@@ -275,7 +275,7 @@ struct swapon_args {
 /* ARGSUSED */
 int
 swapon(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct swapon_args *uap;
 	int *retval;
 {
@@ -338,7 +338,7 @@ swapon(p, uap, retval)
 /* EN: Initialize or free the index-th device's portion of the swap map, adding its available block ranges into swapmap */
 int
 swfree(p, index)
-	struct proc *p;
+	struct process *p;
 	int index;
 {
 	register struct swdevt *sp;

@@ -40,7 +40,7 @@
 
 
 #include <sys/param.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/user.h>
 #include <sys/systm.h>
 #include <sys/buf.h>
@@ -104,7 +104,7 @@ cninit()
 cnopen(dev, flag, mode, p)
 	dev_t dev;
 	int flag, mode;
-	struct proc *p;
+	struct process *p;
 {
 	if (cn_tab == NULL)
 		return (0);
@@ -117,7 +117,7 @@ cnopen(dev, flag, mode, p)
 cnclose(dev, flag, mode, p)
 	dev_t dev;
 	int flag, mode;
-	struct proc *p;
+	struct process *p;
 {
 	if (cn_tab == NULL)
 		return (0);
@@ -154,7 +154,7 @@ cnwrite(dev, uio, flag)
 cnioctl(dev, cmd, data, flag, p)
 	dev_t dev;
 	caddr_t data;
-	struct proc *p;
+	struct process *p;
 {
 	int error;
 
@@ -181,7 +181,7 @@ cnioctl(dev, cmd, data, flag, p)
 cnselect(dev, rw, p)
 	dev_t dev;
 	int rw;
-	struct proc *p;
+	struct process *p;
 {
 	if (cn_tab == NULL)
 		return (1);

@@ -36,7 +36,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/filedesc.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/file.h>
 #include <sys/buf.h>
 #include <sys/malloc.h>
@@ -64,7 +64,7 @@ extern	struct fileops socketops;
 /* EN: socket syscall: allocate a file descriptor and file structure, call socreate and attach the new socket */
 int
 socket(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct socket_args /* {
 		syscallarg(int) domain;
 		syscallarg(int) type;
@@ -98,7 +98,7 @@ socket(p, uap, retval)
 /* EN: bind syscall: copy the user sockaddr into an mbuf and bind a local address to the socket */
 int
 bind(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct bind_args /* {
 		syscallarg(int) s;
 		syscallarg(caddr_t) name;
@@ -125,7 +125,7 @@ bind(p, uap, retval)
 /* EN: listen syscall: mark a socket as listening and set its connection queue backlog */
 int
 listen(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct listen_args /* {
 		syscallarg(int) s;
 		syscallarg(int) backlog;
@@ -145,7 +145,7 @@ listen(p, uap, retval)
 /* EN: accept syscall (4.3BSD compat entry): call accept1 without old-style address format */
 int
 accept(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct accept_args /* {
 		syscallarg(int) s;
 		syscallarg(caddr_t) name;
@@ -161,7 +161,7 @@ accept(p, uap, retval)
 /* EN: 4.3BSD-compatible accept: call accept1 with compat_43=1 to return old-format addresses */
 int
 compat_43_accept(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct accept_args /* {
 		syscallarg(int) s;
 		syscallarg(caddr_t) name;
@@ -181,7 +181,7 @@ compat_43_accept(p, uap, retval)
 /* EN: core accept implementation: dequeue a pending connection, allocate a new socket/file and return the peer address */
 int
 accept1(p, uap, retval, compat_43)
-	struct proc *p;
+	struct process *p;
 	register struct accept_args /* {
 		syscallarg(int) s;
 		syscallarg(caddr_t) name;
@@ -268,7 +268,7 @@ accept1(p, uap, retval, compat_43)
 /* EN: connect syscall: copy the user sockaddr into an mbuf, initiate a connection and wait for completion */
 int
 connect(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct connect_args /* {
 		syscallarg(int) s;
 		syscallarg(caddr_t) name;
@@ -318,7 +318,7 @@ bad:
 /* EN: socketpair syscall: create a pair of interconnected sockets and return two file descriptors */
 int
 socketpair(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct socketpair_args /* {
 		syscallarg(int) domain;
 		syscallarg(int) type;
@@ -383,7 +383,7 @@ free1:
 /* EN: sendto syscall: build a msghdr with the destination address and call sendit to send a datagram */
 int
 sendto(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct sendto_args /* {
 		syscallarg(int) s;
 		syscallarg(caddr_t) buf;
@@ -415,7 +415,7 @@ sendto(p, uap, retval)
 /* EN: 4.3BSD-compatible send: build a msghdr with a single iovec and call sendit */
 int
 compat_43_send(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_send_args /* {
 		syscallarg(int) s;
 		syscallarg(caddr_t) buf;
@@ -443,7 +443,7 @@ compat_43_send(p, uap, retval)
 /* EN: 4.3BSD-compatible sendmsg: copy in old omsghdr and iovec, set MSG_COMPAT and call sendit */
 int
 compat_43_sendmsg(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_sendmsg_args /* {
 		syscallarg(int) s;
 		syscallarg(caddr_t) msg;
@@ -483,7 +483,7 @@ done:
 /* EN: sendmsg syscall: copy in the msghdr and iovec, then call sendit to send */
 int
 sendmsg(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct sendmsg_args /* {
 		syscallarg(int) s;
 		syscallarg(caddr_t) msg;
@@ -524,7 +524,7 @@ done:
 /* EN: common send implementation: build a uio and address/control mbufs from msghdr, call sosend and return the bytes sent */
 int
 sendit(p, s, mp, flags, retsize)
-	register struct proc *p;
+	register struct process *p;
 	int s;
 	register struct msghdr *mp;
 	int flags;
@@ -629,7 +629,7 @@ bad:
 /* EN: 4.3BSD-compatible recvfrom: call recvfrom with MSG_COMPAT set */
 int
 compat_43_recvfrom(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct recvfrom_args /* {
 		syscallarg(int) s;
 		syscallarg(caddr_t) buf;
@@ -650,7 +650,7 @@ compat_43_recvfrom(p, uap, retval)
 /* EN: recvfrom syscall: build a msghdr with a single iovec, call recvit to receive and return the source address */
 int
 recvfrom(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct recvfrom_args /* {
 		syscallarg(int) s;
 		syscallarg(caddr_t) buf;
@@ -687,7 +687,7 @@ recvfrom(p, uap, retval)
 /* EN: 4.3BSD-compatible recv: build a msghdr with a single iovec and call recvit */
 int
 compat_43_recv(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_recv_args /* {
 		syscallarg(int) s;
 		syscallarg(caddr_t) buf;
@@ -719,7 +719,7 @@ compat_43_recv(p, uap, retval)
 /* EN: 4.3BSD-compatible recvmsg: copy in old omsghdr/iovec, call recvit and copy back access rights */
 int
 compat_43_recvmsg(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_recvmsg_args /* {
 		syscallarg(int) s;
 		syscallarg(struct omsghdr *) msg;
@@ -764,7 +764,7 @@ done:
 /* EN: recvmsg syscall: copy in msghdr and iovec, call recvit to receive and copy the msghdr back */
 int
 recvmsg(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct recvmsg_args /* {
 		syscallarg(int) s;
 		syscallarg(struct msghdr *) msg;
@@ -812,7 +812,7 @@ done:
 /* EN: common recv implementation: build a uio from msghdr, call soreceive and copy data/address/control back to userland */
 int
 recvit(p, s, mp, namelenp, retsize)
-	register struct proc *p;
+	register struct process *p;
 	int s;
 	register struct msghdr *mp;
 	caddr_t namelenp;
@@ -945,7 +945,7 @@ out:
 /* EN: shutdown syscall: call soshutdown on a socket to disable one or both directions */
 int
 shutdown(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct shutdown_args /* {
 		syscallarg(int) s;
 		syscallarg(int) how;
@@ -965,7 +965,7 @@ shutdown(p, uap, retval)
 /* EN: setsockopt syscall: copy the user option value into an mbuf and call sosetopt */
 int
 setsockopt(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct setsockopt_args /* {
 		syscallarg(int) s;
 		syscallarg(int) level;
@@ -1003,7 +1003,7 @@ setsockopt(p, uap, retval)
 /* EN: getsockopt syscall: call sogetopt and copy the option value back to userland */
 int
 getsockopt(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct getsockopt_args /* {
 		syscallarg(int) s;
 		syscallarg(int) level;
@@ -1046,7 +1046,7 @@ getsockopt(p, uap, retval)
 /* EN: pipe syscall: create a pair of unidirectional fds backed by connected AF_UNIX stream sockets */
 int
 pipe(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -1097,7 +1097,7 @@ free1:
 /* EN: getsockname syscall entry (compat branch): call getsockname1 without old address format */
 int
 getsockname(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct getsockname_args /* {
 		syscallarg(int) fdes;
 		syscallarg(caddr_t) asa;
@@ -1113,7 +1113,7 @@ getsockname(p, uap, retval)
 /* EN: 4.3BSD-compatible getsockname: call getsockname1 with compat_43=1 */
 int
 compat_43_getsockname(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct getsockname_args /* {
 		syscallarg(int) fdes;
 		syscallarg(caddr_t) asa;
@@ -1134,7 +1134,7 @@ compat_43_getsockname(p, uap, retval)
 /* EN: core getsockname: fetch the local address via PRU_SOCKADDR and copy it to userland */
 int
 getsockname1(p, uap, retval, compat_43)
-	struct proc *p;
+	struct process *p;
 	register struct getsockname_args /* {
 		syscallarg(int) fdes;
 		syscallarg(caddr_t) asa;
@@ -1183,7 +1183,7 @@ bad:
 /* EN: getpeername syscall entry (compat branch): call getpeername1 without old address format */
 int
 getpeername(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct getpeername_args /* {
 		syscallarg(int) fdes;
 		syscallarg(caddr_t) asa;
@@ -1199,7 +1199,7 @@ getpeername(p, uap, retval)
 /* EN: 4.3BSD-compatible getpeername: call getpeername1 with compat_43=1 */
 int
 compat_43_getpeername(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct getpeername_args /* {
 		syscallarg(int) fdes;
 		syscallarg(caddr_t) asa;
@@ -1220,7 +1220,7 @@ compat_43_getpeername(p, uap, retval)
 /* EN: core getpeername: fetch the peer address of a connected socket via PRU_PEERADDR and copy it out */
 int
 getpeername1(p, uap, retval, compat_43)
-	struct proc *p;
+	struct process *p;
 	register struct getpeername_args /* {
 		syscallarg(int) fdes;
 		syscallarg(caddr_t) asa;

@@ -47,7 +47,7 @@
 #include <sys/errno.h>
 #include <sys/malloc.h>
 #include <sys/filedesc.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 
 #ifdef KTRACE
 #include <sys/ktrace.h>
@@ -86,7 +86,7 @@ namei(ndp)
 	struct uio auio;
 	int error, linklen;
 	struct componentname *cnp = &ndp->ni_cnd;
-	struct proc *p = cnp->cn_proc;
+	struct process *p = cnp->cn_proc;
 
 	ndp->ni_cnd.cn_cred = ndp->ni_cnd.cn_proc->p_ucred;
 #ifdef DIAGNOSTIC
@@ -176,7 +176,7 @@ namei(ndp)
 		auio.uio_offset = 0;
 		auio.uio_rw = UIO_READ;
 		auio.uio_segflg = UIO_SYSSPACE;
-		auio.uio_procp = (struct proc *)0;
+		auio.uio_procp = (struct process *)0;
 		auio.uio_resid = MAXPATHLEN;
 		if (error = VOP_READLINK(ndp->ni_vp, &auio, cnp->cn_cred)) {
 			if (ndp->ni_pathlen > 1)
@@ -260,7 +260,7 @@ lookup(ndp)
 	int rdonly;			/* lookup read-only flag bit */
 	int error = 0;
 	struct componentname *cnp = &ndp->ni_cnd;
-	struct proc *p = cnp->cn_proc;
+	struct process *p = cnp->cn_proc;
 
 	/*
 	 * Setup: break out flag bits into variables.
@@ -513,7 +513,7 @@ relookup(dvp, vpp, cnp)
 	struct vnode *dvp, **vpp;
 	struct componentname *cnp;
 {
-	struct proc *p = cnp->cn_proc;
+	struct process *p = cnp->cn_proc;
 	struct vnode *dp = 0;		/* the directory we are searching */
 	int docache;			/* == 0 do not cache last component */
 	int wantparent;			/* 1 => wantparent or lockparent flag */

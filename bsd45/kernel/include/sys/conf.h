@@ -43,7 +43,7 @@
  */
 
 struct buf;
-struct proc;
+struct process;
 struct tty;
 struct uio;
 struct vnode;
@@ -60,12 +60,12 @@ struct vnode;
  */
 struct bdevsw {
 	int	(*d_open)	__P((dev_t dev, int oflags, int devtype,
-				     struct proc *p));
+				     struct process *p));
 	int	(*d_close)	__P((dev_t dev, int fflag, int devtype,
-				     struct proc *p));
+				     struct process *p));
 	void	(*d_strategy)	__P((struct buf *bp));
 	int	(*d_ioctl)	__P((dev_t dev, u_long cmd, caddr_t data,
-				     int fflag, struct proc *p));
+				     int fflag, struct process *p));
 	int	(*d_dump)	();	/* parameters vary by architecture */
 	int	(*d_psize)	__P((dev_t dev));
 	int	d_type;
@@ -80,17 +80,17 @@ extern struct bdevsw bdevsw[];
  */
 struct cdevsw {
 	int	(*d_open)	__P((dev_t dev, int oflags, int devtype,
-				     struct proc *p));
+				     struct process *p));
 	int	(*d_close)	__P((dev_t dev, int fflag, int devtype,
-				     struct proc *));
+				     struct process *));
 	int	(*d_read)	__P((dev_t dev, struct uio *uio, int ioflag));
 	int	(*d_write)	__P((dev_t dev, struct uio *uio, int ioflag));
 	int	(*d_ioctl)	__P((dev_t dev, u_long cmd, caddr_t data,
-				     int fflag, struct proc *p));
+				     int fflag, struct process *p));
 	int	(*d_stop)	__P((struct tty *tp, int rw));
 	int	(*d_reset)	__P((int uban));	/* XXX */
 	struct	tty *d_ttys;
-	int	(*d_select)	__P((dev_t dev, int which, struct proc *p));
+	int	(*d_select)	__P((dev_t dev, int which, struct process *p));
 	int	(*d_mmap)	__P(());
 	void	(*d_strategy)	__P((struct buf *bp));
 	int	d_type;
@@ -115,7 +115,7 @@ struct linesw {
 	int	(*l_write)	__P((struct tty *tp, struct uio *uio,
 				     int flag));
 	int	(*l_ioctl)	__P((struct tty *tp, u_long cmd, caddr_t data,
-				     int flag, struct proc *p));
+				     int flag, struct process *p));
 	int	(*l_rint)	__P((int c, struct tty *tp));
 	int	(*l_start)	__P((struct tty *tp));
 	int	(*l_modem)	__P((struct tty *tp, int flag));

@@ -48,8 +48,8 @@ struct unpcb;
 int	uipc_usrreq __P((struct socket *so, int req, struct mbuf *m,
 		struct mbuf *nam, struct mbuf *control));
 int	unp_attach __P((struct socket *so));
-int	unp_bind __P((struct unpcb *unp, struct mbuf *nam, struct proc *p));
-int	unp_connect __P((struct socket *so, struct mbuf *nam, struct proc *p));
+int	unp_bind __P((struct unpcb *unp, struct mbuf *nam, struct process *p));
+int	unp_connect __P((struct socket *so, struct mbuf *nam, struct process *p));
 int	unp_connect2 __P((struct socket *so, struct socket *so2));
 void	unp_detach __P((struct unpcb *unp));
 void	unp_discard __P((struct file *fp));

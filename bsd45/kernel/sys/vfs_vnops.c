@@ -44,7 +44,7 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/buf.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/mount.h>
 #include <sys/namei.h>
 #include <sys/vnode.h>
@@ -67,7 +67,7 @@ vn_open(ndp, fmode, cmode)
 	int fmode, cmode;
 {
 	register struct vnode *vp;
-	register struct proc *p = ndp->ni_cnd.cn_proc;
+	register struct process *p = ndp->ni_cnd.cn_proc;
 	register struct ucred *cred = p->p_ucred;
 	struct vattr vat;
 	struct vattr *vap = &vat;
@@ -180,7 +180,7 @@ vn_close(vp, flags, cred, p)
 	register struct vnode *vp;
 	int flags;
 	struct ucred *cred;
-	struct proc *p;
+	struct process *p;
 {
 	int error;
 
@@ -206,7 +206,7 @@ vn_rdwr(rw, vp, base, len, offset, segflg, ioflg, cred, aresid, p)
 	int ioflg;
 	struct ucred *cred;
 	int *aresid;
-	struct proc *p;
+	struct process *p;
 {
 	struct uio auio;
 	struct iovec aiov;
@@ -249,7 +249,7 @@ vn_read(fp, uio, cred)
 	struct ucred *cred;
 {
 	struct vnode *vp = (struct vnode *)fp->f_data;
-	struct proc *p = uio->uio_procp;
+	struct process *p = uio->uio_procp;
 	int count, error;
 
 	VOP_LEASE(vp, p, cred, LEASE_READ);
@@ -274,7 +274,7 @@ vn_write(fp, uio, cred)
 	struct ucred *cred;
 {
 	struct vnode *vp = (struct vnode *)fp->f_data;
-	struct proc *p = uio->uio_procp;
+	struct process *p = uio->uio_procp;
 	int count, error, ioflag = IO_UNIT;
 
 	if (vp->v_type == VREG && (fp->f_flag & O_APPEND))
@@ -305,7 +305,7 @@ vn_write(fp, uio, cred)
 vn_stat(vp, sb, p)
 	struct vnode *vp;
 	register struct stat *sb;
-	struct proc *p;
+	struct process *p;
 {
 	struct vattr vattr;
 	register struct vattr *vap;
@@ -372,7 +372,7 @@ vn_ioctl(fp, com, data, p)
 	struct file *fp;
 	u_long com;
 	caddr_t data;
-	struct proc *p;
+	struct process *p;
 {
 	register struct vnode *vp = ((struct vnode *)fp->f_data);
 	struct vattr vattr;
@@ -417,7 +417,7 @@ vn_ioctl(fp, com, data, p)
 vn_select(fp, which, p)
 	struct file *fp;
 	int which;
-	struct proc *p;
+	struct process *p;
 {
 
 	return (VOP_SELECT(((struct vnode *)fp->f_data), which, fp->f_flag,
@@ -434,7 +434,7 @@ int
 vn_lock(vp, flags, p)
 	struct vnode *vp;
 	int flags;
-	struct proc *p;
+	struct process *p;
 {
 	int error;
 	
@@ -463,7 +463,7 @@ vn_lock(vp, flags, p)
 /* EN: file-table vnode close routine: extract the vnode from the file and call vn_close */
 vn_closefile(fp, p)
 	struct file *fp;
-	struct proc *p;
+	struct process *p;
 {
 
 	return (vn_close(((struct vnode *)fp->f_data), fp->f_flag,

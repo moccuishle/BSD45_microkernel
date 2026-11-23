@@ -5,7 +5,7 @@
 光盘启动，也可从 ISO 安装到 VMware 虚拟磁盘后直接从磁盘启动。
 
 > **当前模型（S28+）**：内核态进程 / 线程模型（KLT）——
-> 只有 `struct proc`（进程 = 地址空间/资源容器）和 `struct kthread`
+> 只有 `struct process`（进程 = 地址空间/资源容器）和 `struct kthread`
 > （线程 = 唯一调度单位、独立内核栈），**没有 `struct uproc`**；
 > 用户态不持有任何进程/线程模型，`pthread_*` 只是 syscall 包装。
 > 20 级优先级（0 最低、19 最高）+ 抢占 + 优先级继承 + estcpu/nice
@@ -43,7 +43,7 @@
 
 ### 进程 / 线程 / 调度（内核态 KLT）
 
-- `struct proc`（`kernel/include/sys/proc.h`）：内核态进程对象，持有地址空间
+- `struct process`（`kernel/include/sys/kprocess.h`）：内核态进程对象，持有地址空间
   `uk_pd`、fd 表、信号、mmap、线程链表 `uk_p_threads`；BSD 原字段保留以兼容
   genassym/machdep。
 - `struct kthread`（`kernel/thread/kthread.{c,h}`）：内核线程 = 唯一调度单位；
@@ -117,7 +117,7 @@
 
 | 名称 | 状态 | 说明 |
 |---|---|---|
-| `struct uproc` | **已删除** | 进程模型统一到内核态 `struct proc` |
+| `struct uproc` | **已删除** | 进程模型统一到内核态 `struct process` |
 | `kernel/hal/`（IPL/抢占层） | **已删除** | 能力移至 `io.h`/`ctx.c`/`timer.c`，软中断改为延迟队列 |
 | `kernel/arch/i386/hal/` | **已删除** | 同上 |
 | `kernel/subsys/`（unix/posix/linux/win32 personality） | **已删除** | syscall 直连 `bsd45_syscall()`；`test_subsys.ps1` 已失效 |
@@ -165,7 +165,7 @@ bsd45/
     vm/            pagecache、zcomp、Mach VM
     thread/        kthread（KLT 调度主体）
     driver/        ata、atapi、pccon、dev
-    include/sys/   proc.h / kproc.h / platform.h / smp.h 等
+    include/sys/   kprocess.h / kproc.h / platform.h / smp.h 等
     arch/i386/     pmap、machdep、io.h、ctx.c、timer.c、x86.asm、smp.c、ap_tramp.s
   libc/            用户态 C 库 + libc/arch/bsd/（4.5BSD 用户态源码）
   libexec/         用户态工具与测试程序

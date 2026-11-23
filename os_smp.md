@@ -260,7 +260,7 @@ void kthread_release_cpu(struct kthread *t);         /* xchg(-1) */
 全局变量，现在是一个数组 + 宏：
 
 ```c
-struct sched_cpu { struct proc *sc_cur; struct kthread *sc_curthread;
+struct sched_cpu { struct process *sc_cur; struct kthread *sc_curthread;
                    unsigned sc_cur_pd; int sc_need_resched;
                    struct kthread *sc_idle; int sc_online; unsigned sc_switches; };
 static struct sched_cpu sched_cpu[MAXCPU];

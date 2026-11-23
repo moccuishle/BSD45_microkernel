@@ -239,14 +239,14 @@ Linux 上 `gcc -m32` 直接产出 ELF，`build_*.sh` 用 `ld -m elf_i386` 和
 
 ## 内核态进程 / 线程模型（KLT）与 ISO 安装到虚拟磁盘
 
-### 内核态进程模型：struct proc 挂 kthread
+### 内核态进程模型：struct process 挂 kthread
 
-内核里只有两个进程/线程对象：`struct proc`（`include/sys/proc.h`）和
+内核里只有两个进程/线程对象：`struct process`（`include/sys/kprocess.h`）和
 `struct kthread`（`thread/kthread.h`），**没有 `struct uproc`**。用户态不持有
 任何进程/线程模型——`pthread_create` 等只是 syscall（440–445），真正的线程
 对象、TCB、内核栈和调度全在内核。
 
-- `struct proc` 是权威进程对象：持有地址空间（`uk_pd` 页目录）、fd 表、信号、
+- `struct process` 是权威进程对象：持有地址空间（`uk_pd` 页目录）、fd 表、信号、
   mmap、以及线程链表 `uk_p_threads`。旧的 BSD `p_*` 字段保留在前面，避免
   genassym/machdep 的偏移失效；运行时字段在尾部，用 `uk_` 前缀。
 - `struct kthread` 通过 `t_proc` 归属一个进程、`t_next` 挂进该进程的线程链表；

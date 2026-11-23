@@ -40,7 +40,7 @@
 
 #include <sys/param.h>
 #include <sys/errno.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 
 /*
  * exec system call
@@ -54,7 +54,7 @@ struct execve_args {
 /* 中文：execve 系统调用入口：函数体已删除，直接返回 ENOSYS 表示不支持 */
 /* EN: The execve system-call entry point: its body has been removed, so it simply returns ENOSYS to report it unsupported */
 execve(a1, a2, a3)
-	struct proc *a1;
+	struct process *a1;
 	struct execve_args *a2;
 	int *a3;
 {

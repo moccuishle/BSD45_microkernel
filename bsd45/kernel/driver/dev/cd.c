@@ -48,7 +48,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/errno.h>
 #include <sys/dkstat.h>
 #include <sys/buf.h>
@@ -162,7 +162,7 @@ cdinit(cd)
 	dev_t dev;
 	struct bdevsw *bsw;
 	int error;
-	struct proc *p = curproc; /* XXX */
+	struct process *p = curproc; /* XXX */
 
 #ifdef DEBUG
 	if (cddebug & (CDB_FOLLOW|CDB_INIT))

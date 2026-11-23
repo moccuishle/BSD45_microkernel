@@ -43,7 +43,7 @@
 #include <sys/stat.h>
 #include <sys/vnode.h>
 #include <sys/mount.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/uio.h>
 #include <sys/malloc.h>
 #include <sys/buf.h>
@@ -75,7 +75,7 @@ void	nfsrv_zapsock	__P((struct nfssvc_sock *));
 
 /* Global defs. */
 extern int (*nfsrv3_procs[NFS_NPROCS])();
-extern struct proc *nfs_iodwant[NFS_MAXASYNCDAEMON];
+extern struct process *nfs_iodwant[NFS_MAXASYNCDAEMON];
 extern int nfs_numasync;
 extern time_t nqnfsstarttime;
 extern int nqsrv_writeslack;
@@ -113,7 +113,7 @@ struct getfh_args {
 /* 中文：仅超级用户可用的 getfh(2)：用 FOLLOW|LOCKLEAF 对 uap->fname 做 namei，从挂载点 stat 取 fh_fsid、经 VFS_VPTOFH 取 fh_fid，vput 释放 vnode 后把文件句柄 copyout 到 uap->fhp。 */
 int
 getfh(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct getfh_args *uap;
 	int *retval;
 {
@@ -158,7 +158,7 @@ struct nfssvc_args {
 /* 中文：仅超级用户可用的 nfssvc(2) 分发函数：NFSSVC_BIOD 进入 nfssvc_iod；NFSSVC_ADDSOCK 取套接字并注册；NFSSVC_MNTD 校验 VROOT 挂载点后调用 nqnfs_clientd；其余处理 Kerberos 凭据缓存并运行 nfssvc_nfsd，EINTR/ERESTART 归 0。 */
 int
 nfssvc(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct nfssvc_args *uap;
 	int *retval;
 {
@@ -424,7 +424,7 @@ int
 nfssvc_nfsd(nsd, argp, p)
 	struct nfsd_srvargs *nsd;
 	caddr_t argp;
-	struct proc *p;
+	struct process *p;
 {
 	register struct mbuf *m;
 	register int siz;
@@ -708,7 +708,7 @@ done:
 /* 中文：客户端异步 I/O 守护进程：占用 nfs_asyncdaemon 空槽（无空槽返回 EBUSY），睡眠等待 nfs_bufq 非空后逐个执行 nfs_doio 读/预写，并顺带取出同 vnode 的延迟写缓冲；仅在出错时返回。 */
 int
 nfssvc_iod(p)
-	struct proc *p;
+	struct process *p;
 {
 	register struct buf *bp, *nbp;
 	register int i, myiod;
@@ -741,7 +741,7 @@ nfssvc_iod(p)
 		/* Take one off the front of the list */
 		TAILQ_REMOVE(&nfs_bufq, bp, b_freelist);
 		if (bp->b_flags & B_READ)
-		    (void) nfs_doio(bp, bp->b_rcred, (struct proc *)0);
+		    (void) nfs_doio(bp, bp->b_rcred, (struct process *)0);
 		else do {
 		    /*
 		     * Look for a delayed write for the same vnode, so I can do 
@@ -770,7 +770,7 @@ nfssvc_iod(p)
 			reassignbuf(nbp, nbp->b_vp);
 			nbp->b_vp->v_numoutput++;
 		    }
-		    (void) nfs_doio(bp, bp->b_wcred, (struct proc *)0);
+		    (void) nfs_doio(bp, bp->b_wcred, (struct process *)0);
 		} while (bp = nbp);
 	    }
 	    if (error) {
@@ -808,7 +808,7 @@ nfsrv_zapsock(slp)
 		so = slp->ns_so;
 		so->so_upcall = NULL;
 		soshutdown(so, 2);
-		closef(fp, (struct proc *)0);
+		closef(fp, (struct process *)0);
 		if (slp->ns_nam)
 			MFREE(slp->ns_nam, m);
 		m_freem(slp->ns_raw);

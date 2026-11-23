@@ -74,5 +74,5 @@ struct acct {
 #ifdef KERNEL
 struct vnode	*acctp;
 
-int	acct_process __P((struct proc *p));
+int	acct_process __P((struct process *p));
 #endif

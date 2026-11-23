@@ -85,7 +85,7 @@ extern int	nkthread;	/* runtime TCB slots, set by mem_plan_init() */
 #define	KTHREAD_TABLE_VA 0xFEF00000	/* S410: TCB pool window */
 #define	KSTACK_SIZE	16384
 
-struct proc;
+struct process;
 
 struct kthread {
 	int		t_state;
@@ -99,7 +99,7 @@ struct kthread {
 	int		t_used;
 	/* KLT: threads belonging to a process form a list via t_next;
 	 * t_proc points back to the owning kernel process object. */
-	struct proc	*t_proc;
+	struct process	*t_proc;
 	struct kthread	*t_next;	/* next thread in proc->uk_p_threads list */
 	struct kthread	*t_rqnext;	/* next TCB in the scheduler run queue */
 	int		t_onrq;		/* 1 if currently linked on the run queue */
@@ -169,7 +169,7 @@ void kthread_prime_stacks(void);
 void	kthread_init(void);
 struct kthread *kthread_spawn(const char *name, void (*entry)(void *),
 	    void *arg);
-struct kthread *kthread_user_spawn(struct proc *p, int tid);
+struct kthread *kthread_user_spawn(struct process *p, int tid);
 struct kthread *kthread_user_find(int tid);
 void	kthread_user_free(struct kthread *t);
 /* S413: CPU ownership of a TCB (atomic claim, see kthread.c). */

@@ -70,7 +70,7 @@
 #include "bpfilter.h"
 
 #include <sys/param.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/mbuf.h>
 #include <sys/buf.h>
 #include <sys/dkstat.h>
@@ -239,7 +239,7 @@ slopen(dev, tp)
 	dev_t dev;
 	register struct tty *tp;
 {
-	struct proc *p = curproc;		/* XXX */
+	struct process *p = curproc;		/* XXX */
 	register struct sl_softc *sc;
 	register int nsl;
 	int error;

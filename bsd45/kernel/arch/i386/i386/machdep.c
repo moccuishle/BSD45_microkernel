@@ -41,7 +41,7 @@
 #include <sys/signalvar.h>
 #include <sys/kernel.h>
 #include <sys/map.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/user.h>
 #include <sys/buf.h>
 #include <sys/reboot.h>
@@ -334,7 +334,7 @@ sendsig(catcher, sig, mask, code)
 	int sig, mask;
 	unsigned code;
 {
-	register struct proc *p = curproc;
+	register struct process *p = curproc;
 	register int *regs;
 	register struct sigframe *fp;
 	struct sigacts *psp = p->p_sigacts;
@@ -438,7 +438,7 @@ struct sigreturn_args {
 /* EN: Validates the sigframe at esp; restores eax/edx/ecx, SA_ONSTACK, sigmask minus SIGKILL/SIGCONT/SIGSTOP, ebp/esp/eip/eflags; returns EJUSTRETURN, or EINVAL if useracc fails. */
 /* 中文：校验 esp 处的 sigframe：恢复 eax/edx/ecx、SA_ONSTACK 标志、剔除 SIGKILL/SIGCONT/SIGSTOP 后的信号屏蔽字以及 ebp/esp/eip/eflags；成功返回 EJUSTRETURN，useracc 校验失败返回 EINVAL。 */
 sigreturn(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct sigreturn_args *uap;
 	int *retval;
 {
@@ -655,7 +655,7 @@ initcpu()
 /* EN: Prepares a process for exec: clears ebp and loads eip=entry, zeroes pcb_flags, sets CR0_EM to start FP emulation and calls npxinit(0x262) when NNPX>0. */
 /* 中文：为 exec 准备用户寄存器：清 ebp 并置 eip=entry，清零 pcb_flags，置 CR0_EM 进入浮点模拟，并在 NNPX>0 时调用 npxinit(0x262)。 */
 setregs(p, entry, retval)
-	register struct proc *p;
+	register struct process *p;
 	u_long entry;
 	int retval[2];
 {
@@ -682,7 +682,7 @@ cpu_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	size_t *oldlenp;
 	void *newp;
 	size_t newlen;
-	struct proc *p;
+	struct process *p;
 {
 
 	/* all sysctl names at this level are terminal */
@@ -1067,9 +1067,9 @@ _insque(element, head)
 	register struct prochd *element, *head;
 {
 	element->ph_link = head->ph_link;
-	head->ph_link = (struct proc *)element;
-	element->ph_rlink = (struct proc *)head;
-	((struct prochd *)(element->ph_link))->ph_rlink=(struct proc *)element;
+	head->ph_link = (struct process *)element;
+	element->ph_rlink = (struct process *)head;
+	((struct prochd *)(element->ph_link))->ph_rlink=(struct process *)element;
 }
 
 /*
@@ -1083,7 +1083,7 @@ _remque(element)
 {
 	((struct prochd *)(element->ph_link))->ph_rlink = element->ph_rlink;
 	((struct prochd *)(element->ph_rlink))->ph_link = element->ph_link;
-	element->ph_rlink = (struct proc *)0;
+	element->ph_rlink = (struct process *)0;
 }
 
 /* 中文：空的 vm 访问权限检查桩函数，不做任何操作 */

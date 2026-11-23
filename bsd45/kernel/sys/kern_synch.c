@@ -40,7 +40,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/kernel.h>
 #include <sys/buf.h>
 #include <sys/signalvar.h>
@@ -166,7 +166,7 @@ schedcpu(arg)
 	void *arg;
 {
 	register fixpt_t loadfac = loadfactor(averunnable.ldavg[0]);
-	register struct proc *p;
+	register struct process *p;
 	register int s;
 	register unsigned int newcpu;
 
@@ -233,7 +233,7 @@ schedcpu(arg)
 /* EN: Recalculate a process's priority after it has slept: decay p_estcpu by load factor and sleep time, then reset the priority */
 void
 updatepri(p)
-	register struct proc *p;
+	register struct process *p;
 {
 	register unsigned int newcpu = p->p_estcpu;
 	register fixpt_t loadfac = loadfactor(averunnable.ldavg[0]);
@@ -257,8 +257,8 @@ updatepri(p)
 #define TABLESIZE	128
 #define LOOKUP(x)	(((long)(x) >> 8) & (TABLESIZE - 1))
 struct slpque {
-	struct proc *sq_head;
-	struct proc **sq_tailp;
+	struct process *sq_head;
+	struct process **sq_tailp;
 } slpque[TABLESIZE];
 
 /*
@@ -291,7 +291,7 @@ tsleep(ident, priority, wmesg, timo)
 	int priority, timo;
 	char *wmesg;
 {
-	register struct proc *p = curproc;
+	register struct process *p = curproc;
 	register struct slpque *qp;
 	register s;
 	int sig, catch = priority & PCATCH;
@@ -399,10 +399,10 @@ void
 endtsleep(arg)
 	void *arg;
 {
-	register struct proc *p;
+	register struct process *p;
 	int s;
 
-	p = (struct proc *)arg;
+	p = (struct process *)arg;
 	s = splhigh();
 	if (p->p_wchan) {
 		if (p->p_stat == SSLEEP)
@@ -424,7 +424,7 @@ sleep(ident, priority)
 	void *ident;
 	int priority;
 {
-	register struct proc *p = curproc;
+	register struct process *p = curproc;
 	register struct slpque *qp;
 	register s;
 	extern int cold;
@@ -484,10 +484,10 @@ sleep(ident, priority)
 /* EN: Remove a process from its wait queue */
 void
 unsleep(p)
-	register struct proc *p;
+	register struct process *p;
 {
 	register struct slpque *qp;
-	register struct proc **hp;
+	register struct process **hp;
 	int s;
 
 	s = splhigh();
@@ -513,7 +513,7 @@ wakeup(ident)
 	register void *ident;
 {
 	register struct slpque *qp;
-	register struct proc *p, **q;
+	register struct process *p, **q;
 	int s;
 
 	s = splhigh();
@@ -564,7 +564,7 @@ restart:
 void
 mi_switch()
 {
-	register struct proc *p = curproc;	/* XXX */
+	register struct process *p = curproc;	/* XXX */
 	register struct rlimit *rlim;
 	register long s, u;
 	struct timeval tv;
@@ -630,7 +630,7 @@ rqinit()
 	register int i;
 
 	for (i = 0; i < NQS; i++)
-		qs[i].ph_link = qs[i].ph_rlink = (struct proc *)&qs[i];
+		qs[i].ph_link = qs[i].ph_rlink = (struct process *)&qs[i];
 }
 
 /*
@@ -642,7 +642,7 @@ rqinit()
 /* EN: Change a process state to runnable: put it on the run queue if resident, otherwise wake the swapper */
 void
 setrunnable(p)
-	register struct proc *p;
+	register struct process *p;
 {
 	register int s;
 
@@ -683,7 +683,7 @@ setrunnable(p)
 /* EN: Compute a process's user-mode priority; request a reschedule if it is better than the current process's priority */
 void
 resetpriority(p)
-	register struct proc *p;
+	register struct process *p;
 {
 	register unsigned int newpriority;
 

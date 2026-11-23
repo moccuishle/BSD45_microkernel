@@ -41,7 +41,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/ioctl.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #define	TTYDEFCHARS
 #include <sys/tty.h>
 #undef	TTYDEFCHARS
@@ -55,7 +55,7 @@
 
 #include <vm/vm.h>
 
-static int	proc_compare __P((struct proc *p1, struct proc *p2));
+static int	proc_compare __P((struct process *p1, struct process *p2));
 static int	ttnread __P((struct tty *));
 static void	ttyblock __P((struct tty *tp));
 static void	ttyecho __P((int, struct tty *tp));
@@ -632,7 +632,7 @@ ttioctl(tp, cmd, data, flag)
 {
 	extern struct tty *constty;	/* Temporary virtual console. */
 	extern int nlinesw;
-	register struct proc *p;
+	register struct process *p;
 	int s, error;
 
 	p = curproc;			/* XXX */
@@ -908,7 +908,7 @@ int
 ttselect(device, rw, p)
 	dev_t device;
 	int rw;
-	struct proc *p;
+	struct process *p;
 {
 	register struct tty *tp;
 	int nread, s;
@@ -1238,7 +1238,7 @@ ttread(tp, uio, flag)
 	register int c;
 	register long lflag;
 	register u_char *cc = tp->t_cc;
-	register struct proc *p = curproc;
+	register struct process *p = curproc;
 	int s, first, error = 0;
 
 loop:	lflag = tp->t_lflag;
@@ -1403,7 +1403,7 @@ ttwrite(tp, uio, flag)
 {
 	register char *cp;
 	register int cc, ce;
-	register struct proc *p;
+	register struct process *p;
 	int i, hiwat, cnt, error, s;
 	char obuf[OBUFSIZ];
 
@@ -1813,7 +1813,7 @@ void
 ttyinfo(tp)
 	register struct tty *tp;
 {
-	register struct proc *p, *pick;
+	register struct process *p, *pick;
 	struct timeval utime, stime;
 	int tmp;
 
@@ -1889,7 +1889,7 @@ ttyinfo(tp)
 /* EN: Compare two processes to select the more suitable target for a tty signal/interrupt (based on priority and terminal association). */
 static int
 proc_compare(p1, p2)
-	register struct proc *p1, *p2;
+	register struct process *p1, *p2;
 {
 
 	if (p1 == NULL)

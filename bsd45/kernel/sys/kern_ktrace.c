@@ -37,7 +37,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/file.h>
 #include <sys/namei.h>
 #include <sys/vnode.h>
@@ -55,7 +55,7 @@ ktrgetheader(type)
 	int type;
 {
 	register struct ktr_header *kth;
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 
 	MALLOC(kth, struct ktr_header *, sizeof (struct ktr_header), 
 		M_TEMP, M_WAITOK);
@@ -77,7 +77,7 @@ ktrsyscall(vp, code, argsize, args)
 	struct	ktr_header *kth;
 	struct	ktr_syscall *ktp;
 	register len = sizeof(struct ktr_syscall) + argsize;
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 	register_t *argp;
 	int i;
 
@@ -106,7 +106,7 @@ ktrsysret(vp, code, error, retval)
 {
 	struct ktr_header *kth;
 	struct ktr_sysret ktp;
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 
 	p->p_traceflag |= KTRFAC_ACTIVE;
 	kth = ktrgetheader(KTR_SYSRET);
@@ -130,7 +130,7 @@ ktrnamei(vp, path)
 	char *path;
 {
 	struct ktr_header *kth;
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 
 	p->p_traceflag |= KTRFAC_ACTIVE;
 	kth = ktrgetheader(KTR_NAMEI);
@@ -156,7 +156,7 @@ ktrgenio(vp, fd, rw, iov, len, error)
 	register struct ktr_genio *ktp;
 	register caddr_t cp;
 	register int resid = len, cnt;
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 	
 	if (error)
 		return;
@@ -197,7 +197,7 @@ ktrpsig(vp, sig, action, mask, code)
 {
 	struct ktr_header *kth;
 	struct ktr_psig	kp;
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 
 	p->p_traceflag |= KTRFAC_ACTIVE;
 	kth = ktrgetheader(KTR_PSIG);
@@ -222,7 +222,7 @@ ktrcsw(vp, out, user)
 {
 	struct ktr_header *kth;
 	struct	ktr_csw kc;
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 
 	p->p_traceflag |= KTRFAC_ACTIVE;
 	kth = ktrgetheader(KTR_CSW);
@@ -246,7 +246,7 @@ ktrcsw(vp, out, user)
 /* EN: Implement the ktrace system call: parse ops/facs/pid, open the trace file, set or clear kernel tracing on the target process and optionally propagate to descendants */
 int
 ktrace(curp, uap, retval)
-	struct proc *curp;
+	struct process *curp;
 	register struct ktrace_args /* {
 		syscallarg(char *) fname;
 		syscallarg(int) ops;
@@ -256,7 +256,7 @@ ktrace(curp, uap, retval)
 	register_t *retval;
 {
 	register struct vnode *vp = NULL;
-	register struct proc *p;
+	register struct process *p;
 	struct pgrp *pg;
 	int facs = SCARG(uap, facs) & ~KTRFAC_ROOT;
 	int ops = KTROP(SCARG(uap, ops));
@@ -353,7 +353,7 @@ done:
 /* EN: Set or clear kernel tracing state on a single process: after permission checks, update p_traceflag and the trace vnode reference */
 int
 ktrops(curp, p, ops, facs, vp)
-	struct proc *p, *curp;
+	struct process *p, *curp;
 	int ops, facs;
 	struct vnode *vp;
 {
@@ -391,11 +391,11 @@ ktrops(curp, p, ops, facs, vp)
 /* 中文：遍历进程树：从 top 开始对其自身、子孙及兄弟进程逐一调用 ktrops 应用跟踪设置 */
 /* EN: Walk the process tree: starting at top, apply the trace settings via ktrops to it and all descendants and siblings */
 ktrsetchildren(curp, top, ops, facs, vp)
-	struct proc *curp, *top;
+	struct process *curp, *top;
 	int ops, facs;
 	struct vnode *vp;
 {
-	register struct proc *p;
+	register struct process *p;
 	register int ret = 0;
 
 	p = top;
@@ -429,7 +429,7 @@ ktrwrite(vp, kth)
 {
 	struct uio auio;
 	struct iovec aiov[2];
-	register struct proc *p = curproc;	/* XXX */
+	register struct process *p = curproc;	/* XXX */
 	int error;
 
 	if (vp == NULL)
@@ -442,7 +442,7 @@ ktrwrite(vp, kth)
 	aiov[0].iov_len = sizeof(struct ktr_header);
 	auio.uio_resid = sizeof(struct ktr_header);
 	auio.uio_iovcnt = 1;
-	auio.uio_procp = (struct proc *)0;
+	auio.uio_procp = (struct process *)0;
 	if (kth->ktr_len > 0) {
 		auio.uio_iovcnt++;
 		aiov[1].iov_base = kth->ktr_buf;
@@ -480,7 +480,7 @@ ktrwrite(vp, kth)
 /* 中文：检查调用者是否有权限修改目标进程的内核跟踪状态：目标权限不得高于调用者，KTRFAC_ROOT 标记仅允许 root 更改 */
 /* EN: Check whether the caller may change the target's kernel trace state: the target must not hold more privileges than the caller, and KTRFAC_ROOT may only be changed by root */
 ktrcanset(callp, targetp)
-	struct proc *callp, *targetp;
+	struct process *callp, *targetp;
 {
 	register struct pcred *caller = callp->p_cred;
 	register struct pcred *target = targetp->p_cred;

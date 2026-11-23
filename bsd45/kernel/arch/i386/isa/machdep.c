@@ -41,7 +41,7 @@
 #include <sys/signalvar.h>
 #include <sys/kernel.h>
 #include <sys/map.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/user.h>
 #include <sys/buf.h>
 #include <sys/reboot.h>
@@ -343,7 +343,7 @@ sendsig(catcher, sig, mask, code)
 	int sig, mask;
 	u_long code;
 {
-	register struct proc *p = curproc;
+	register struct process *p = curproc;
 	register int *regs;
 	register struct sigframe *fp;
 	struct sigacts *psp = p->p_sigacts;
@@ -447,7 +447,7 @@ struct sigreturn_args {
 /* EN: Restores scratch regs and sigcontext (sp/fp/pc/ps, signal mask, onstack flag) from the frame left by sendsig after useracc checks, returns EJUSTRETURN to resume user code. */
 /* 中文：经 useracc 校验后从 sendsig 留下的帧恢复寄存器与 sigcontext（sp/fp/pc/ps、信号屏蔽、onstack 标志），返回 EJUSTRETURN 继续用户态执行。 */
 sigreturn(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct sigreturn_args *uap;
 	int *retval;
 {
@@ -664,7 +664,7 @@ initcpu()
 /* EN: Resets registers for exec: EBP=0, EIP=entry, pcb_flags=0, sets CR0_EM to emulate floating point, and reinitializes the NPX via npxinit when configured. */
 /* 中文：为 exec 重置寄存器：EBP 清零、EIP=entry、pcb_flags=0，置 CR0_EM 进入浮点模拟，并在配置了 NPX 时调用 npxinit 重新初始化。 */
 setregs(p, entry, retval)
-	register struct proc *p;
+	register struct process *p;
 	u_long entry;
 	int retval[2];
 {
@@ -691,7 +691,7 @@ cpu_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	size_t *oldlenp;
 	void *newp;
 	size_t newlen;
-	struct proc *p;
+	struct process *p;
 {
 
 	/* all sysctl names at this level are terminal */
@@ -1179,9 +1179,9 @@ _insque(element, head)
 	register struct prochd *element, *head;
 {
 	element->ph_link = head->ph_link;
-	head->ph_link = (struct proc *)element;
-	element->ph_rlink = (struct proc *)head;
-	((struct prochd *)(element->ph_link))->ph_rlink=(struct proc *)element;
+	head->ph_link = (struct process *)element;
+	element->ph_rlink = (struct process *)head;
+	((struct prochd *)(element->ph_link))->ph_rlink=(struct process *)element;
 }
 
 /*
@@ -1195,7 +1195,7 @@ _remque(element)
 {
 	((struct prochd *)(element->ph_link))->ph_rlink = element->ph_rlink;
 	((struct prochd *)(element->ph_rlink))->ph_link = element->ph_link;
-	element->ph_rlink = (struct proc *)0;
+	element->ph_rlink = (struct process *)0;
 }
 
 /* 中文：释放虚拟内存访问的空实现占位函数，本移植版中无需实际操作 */

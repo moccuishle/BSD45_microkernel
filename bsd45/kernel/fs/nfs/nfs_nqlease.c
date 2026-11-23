@@ -54,7 +54,7 @@
 #include <sys/vnode.h>
 #include <sys/mount.h>
 #include <sys/kernel.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/systm.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
@@ -158,7 +158,7 @@ nqsrv_getlease(vp, duration, flags, slp, procp, nam, cachablep, frev, cred)
 	u_long *duration;
 	int flags;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf *nam;
 	int *cachablep;
 	u_quad_t *frev;
@@ -323,7 +323,7 @@ int
 nqnfs_vop_lease_check(ap)
 	struct vop_lease_args /* {
 		struct vnode *a_vp;
-		struct proc *a_p;
+		struct process *a_p;
 		struct ucred *a_cred;
 		int a_flag;
 	} */ *ap;
@@ -705,7 +705,7 @@ int
 nqnfsrv_getlease(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -765,7 +765,7 @@ int
 nqnfsrv_vacated(nfsd, slp, procp, mrq)
 	struct nfsrv_descript *nfsd;
 	struct nfssvc_sock *slp;
-	struct proc *procp;
+	struct process *procp;
 	struct mbuf **mrq;
 {
 	struct mbuf *mrep = nfsd->nd_mrep, *md = nfsd->nd_md;
@@ -845,7 +845,7 @@ nqnfs_getlease(vp, rwflag, cred, p)
 	register struct vnode *vp;
 	int rwflag;
 	struct ucred *cred;
-	struct proc *p;
+	struct process *p;
 {
 	register u_long *tl;
 	register caddr_t cp;
@@ -1009,7 +1009,7 @@ nqnfs_clientd(nmp, cred, ncd, flag, argp, p)
 	struct nfsd_cargs *ncd;
 	int flag;
 	caddr_t argp;
-	struct proc *p;
+	struct process *p;
 {
 	register struct nfsnode *np;
 	struct vnode *vp;
@@ -1063,7 +1063,7 @@ nqnfs_clientd(nmp, cred, ncd, flag, argp, p)
 		    myrep.r_flags = R_GETONEREP;
 		    myrep.r_nmp = nmp;
 		    myrep.r_mrep = (struct mbuf *)0;
-		    myrep.r_procp = (struct proc *)0;
+		    myrep.r_procp = (struct process *)0;
 		    (void) nfs_reply(&myrep);
 		}
 
@@ -1165,7 +1165,7 @@ void
 nqnfs_lease_updatetime(deltat)
 	register int deltat;
 {
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 	struct nqlease *lp;
 	struct nfsnode *np;
 	struct mount *mp, *nxtmp;

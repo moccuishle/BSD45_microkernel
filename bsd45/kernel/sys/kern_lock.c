@@ -38,7 +38,7 @@
  */
 
 #include <sys/param.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/lock.h>
 #include <machine/cpu.h>
 
@@ -162,7 +162,7 @@ lockmgr(lkp, flags, interlkp, p)
 	__volatile struct lock *lkp;
 	u_int flags;
 	struct simplelock *interlkp;
-	struct proc *p;
+	struct process *p;
 {
 	int error;
 	pid_t pid;

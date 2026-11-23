@@ -46,7 +46,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/user.h>
 #include <sys/acct.h>
 #include <sys/kernel.h>
@@ -84,7 +84,7 @@ trap(frame)
 	struct trapframe frame;
 {
 	register int i;
-	register struct proc *p = curproc;
+	register struct process *p = curproc;
 	u_quad_t sticks;
 	int ucode, type, code, eva;
 	extern int cold;
@@ -311,7 +311,7 @@ syscall(frame)
 	register caddr_t params;
 	register int i;
 	register struct sysent *callp;
-	register struct proc *p = curproc;
+	register struct process *p = curproc;
 	u_quad_t sticks;
 	int error, opc;
 	int args[8], rval[2];
@@ -423,7 +423,7 @@ done:
 /* 中文：为 map 处理地址 addr 的缺页：先按 RLIMIT_STACK 检查栈上限，PDE 无效时先用 vm_fault 调入页表页，再调入数据页，并用 vm_map_pageable 固定页表页、更新 vm_ssize。 */
 int
 user_page_fault (p, map, addr, ftype, type)
-struct proc *p;
+struct process *p;
 vm_map_t map;
 caddr_t addr;
 vm_prot_t ftype;

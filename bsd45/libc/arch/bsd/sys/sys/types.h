@@ -150,7 +150,7 @@ typedef	struct fd_set {
  * common structures that cross subsystem boundaries here; others are mostly
  * used in the same place that the structure is defined.
  */
-struct	proc;
+struct	process;
 struct	pgrp;
 struct	ucred;
 struct	rusage;

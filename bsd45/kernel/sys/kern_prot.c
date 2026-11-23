@@ -46,7 +46,7 @@
 #include <sys/acct.h>
 #include <sys/systm.h>
 #include <sys/ucred.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/timeb.h>
 #include <sys/times.h>
 #include <sys/malloc.h>
@@ -59,7 +59,7 @@
 /* ARGSUSED */
 int
 getpid(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -76,7 +76,7 @@ getpid(p, uap, retval)
 /* ARGSUSED */
 int
 getppid(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -90,7 +90,7 @@ getppid(p, uap, retval)
 /* EN: The getpgrp system call: return the process group ID of the current process */
 int
 getpgrp(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -104,7 +104,7 @@ getpgrp(p, uap, retval)
 /* ARGSUSED */
 int
 getuid(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -121,7 +121,7 @@ getuid(p, uap, retval)
 /* ARGSUSED */
 int
 geteuid(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -135,7 +135,7 @@ geteuid(p, uap, retval)
 /* ARGSUSED */
 int
 getgid(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -157,7 +157,7 @@ getgid(p, uap, retval)
 /* ARGSUSED */
 int
 getegid(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -170,7 +170,7 @@ getegid(p, uap, retval)
 /* EN: The getgroups system call: return the supplementary group IDs of the current process; when gidsetsize is 0 only return the group count */
 int
 getgroups(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct getgroups_args /* {
 		syscallarg(u_int) gidsetsize;
 		syscallarg(gid_t *) gidset;
@@ -200,7 +200,7 @@ getgroups(p, uap, retval)
 /* ARGSUSED */
 int
 setsid(p, uap, retval)
-	register struct proc *p;
+	register struct process *p;
 	void *uap;
 	register_t *retval;
 {
@@ -232,14 +232,14 @@ setsid(p, uap, retval)
 /* ARGSUSED */
 int
 setpgid(curp, uap, retval)
-	struct proc *curp;
+	struct process *curp;
 	register struct setpgid_args /* {
 		syscallarg(int) pid;
 		syscallarg(int) pgid;
 	} */ *uap;
 	register_t *retval;
 {
-	register struct proc *targp;		/* target process */
+	register struct process *targp;		/* target process */
 	register struct pgrp *pgrp;		/* target pgrp */
 
 	if (SCARG(uap, pid) != 0 && SCARG(uap, pid) != curp->p_pid) {
@@ -267,7 +267,7 @@ setpgid(curp, uap, retval)
 /* ARGSUSED */
 int
 setuid(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct setuid_args /* {
 		syscallarg(uid_t) uid;
 	} */ *uap;
@@ -301,7 +301,7 @@ setuid(p, uap, retval)
 /* ARGSUSED */
 int
 seteuid(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct seteuid_args /* {
 		syscallarg(uid_t) euid;
 	} */ *uap;
@@ -330,7 +330,7 @@ seteuid(p, uap, retval)
 /* ARGSUSED */
 int
 setgid(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct setgid_args /* {
 		syscallarg(gid_t) gid;
 	} */ *uap;
@@ -356,7 +356,7 @@ setgid(p, uap, retval)
 /* ARGSUSED */
 int
 setegid(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct setegid_args /* {
 		syscallarg(gid_t) egid;
 	} */ *uap;
@@ -381,7 +381,7 @@ setegid(p, uap, retval)
 /* ARGSUSED */
 int
 setgroups(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct setgroups_args /* {
 		syscallarg(u_int) gidsetsize;
 		syscallarg(gid_t *) gidset;
@@ -412,7 +412,7 @@ setgroups(p, uap, retval)
 /* ARGSUSED */
 int
 compat_43_setreuid(p, uap, retval)
-	register struct proc *p;
+	register struct process *p;
 	struct compat_43_setreuid_args /* {
 		syscallarg(int) ruid;
 		syscallarg(int) euid;
@@ -453,7 +453,7 @@ compat_43_setreuid(p, uap, retval)
 /* ARGSUSED */
 int
 compat_43_setregid(p, uap, retval)
-	register struct proc *p;
+	register struct process *p;
 	struct compat_43_setregid_args /* {
 		syscallarg(int) rgid;
 		syscallarg(int) egid;
@@ -610,7 +610,7 @@ crdup(cr)
 /* ARGSUSED */
 int
 getlogin(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct getlogin_args /* {
 		syscallarg(char *) namebuf;
 		syscallarg(u_int) namelen;
@@ -632,7 +632,7 @@ getlogin(p, uap, retval)
 /* ARGSUSED */
 int
 setlogin(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct setlogin_args /* {
 		syscallarg(char *) namebuf;
 	} */ *uap;

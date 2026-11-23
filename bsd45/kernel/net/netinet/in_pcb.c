@@ -43,7 +43,7 @@
 #include <sys/ioctl.h>
 #include <sys/errno.h>
 #include <sys/time.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 
 #include <net/if.h>
 #include <net/route.h>
@@ -87,7 +87,7 @@ in_pcbbind(inp, nam)
 	register struct socket *so = inp->inp_socket;
 	register struct inpcb *head = inp->inp_head;
 	register struct sockaddr_in *sin;
-	struct proc *p = curproc;		/* XXX */
+	struct process *p = curproc;		/* XXX */
 	u_short lport = 0;
 	int wild = 0, reuseport = (so->so_options & SO_REUSEPORT);
 	int error;

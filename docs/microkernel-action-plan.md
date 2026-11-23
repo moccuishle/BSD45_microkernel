@@ -17,7 +17,7 @@
 |---|---|---|
 | 「协作式调度、无时钟中断」 | **已有 100Hz PIT + `sched_tick()` 抢占**（`arch/i386/timer.c` 已编进构建，IDT 挂 IRQ0，`sched_tick` 在 `usermode.c:2594`） | 看门狗超时、服务抢占、卡死检测都有了硬件基础；文档里「无时钟无法检测卡死」的限制**已不成立** |
 | KP-4 阻塞原语「完全缺失」 | 线程层已有 `kthread_block()` / `kthread_wake()`（`kthread.c:275/290`，含 run queue 出/入队 + `sched_on_block/wake` + 栈切换） | 第一步不是「从零写 KP-4」，而是**给现有机制加一个 wait channel 包装** |
-| 调度单位是 `struct uproc` / `struct proc` | 已是 **KLT**：`struct proc`（资源容器）+ `struct kthread`（唯一调度单位），20 级优先级 + 继承 + estcpu | IPC 阻塞/唤醒应挂在 `kthread` 上，不是 `proc`；端口等待队列存 TCB |
+| 调度单位是 `struct uproc` / `struct process` | 已是 **KLT**：`struct process`（资源容器）+ `struct kthread`（唯一调度单位），20 级优先级 + 继承 + estcpu | IPC 阻塞/唤醒应挂在 `kthread` 上，不是 `proc`；端口等待队列存 TCB |
 
 结论：**真正缺的只有 KP-6（IPC send/recv）和 KP-7（共享页）**。KP-4 是 80% 现成的。
 这是好消息——S100.3 的门槛比文档写的低。

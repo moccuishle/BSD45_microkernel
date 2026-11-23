@@ -53,7 +53,7 @@
 #include <machine/ptrace.h>	/* machine-specific requests, if any */
 
 #ifdef KERNEL
-void	proc_reparent __P((struct proc *child, struct proc *newparent));
+void	proc_reparent __P((struct process *child, struct process *newparent));
 #else /* !KERNEL */
 
 #include <sys/cdefs.h>

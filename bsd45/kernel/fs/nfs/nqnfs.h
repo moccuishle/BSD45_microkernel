@@ -201,13 +201,13 @@ u_long nqfhhash;
 void	nqnfs_lease_updatetime __P((int));
 int	nqsrv_cmpnam __P((struct nfssvc_sock *,struct mbuf *,struct nqhost *));
 int	nqsrv_getlease __P((struct vnode *, u_long *, int,
-		struct nfssvc_sock *, struct proc *, struct mbuf *, int *,
+		struct nfssvc_sock *, struct process *, struct mbuf *, int *,
 		u_quad_t *, struct ucred *));
-int	nqnfs_getlease __P((struct vnode *, int, struct ucred *,struct proc *));
+int	nqnfs_getlease __P((struct vnode *, int, struct ucred *,struct process *));
 int	nqnfs_callback __P((struct nfsmount *, struct mbuf *, struct mbuf *,
 		caddr_t));
 int	nqnfs_clientd __P((struct nfsmount *, struct ucred *,
-		struct nfsd_cargs *, int, caddr_t, struct proc *));
+		struct nfsd_cargs *, int, caddr_t, struct process *));
 #endif
 
 #endif

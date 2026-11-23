@@ -44,15 +44,15 @@
 #include <sys/file.h>
 #include <sys/resourcevar.h>
 #include <sys/malloc.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 
 #include <sys/mount.h>
 #include <sys/syscallargs.h>
 
 #include <vm/vm.h>
 
-int	donice __P((struct proc *curp, struct proc *chgp, int n));
-int	dosetrlimit __P((struct proc *p, u_int which, struct rlimit *limp));
+int	donice __P((struct process *curp, struct process *chgp, int n));
+int	dosetrlimit __P((struct process *p, u_int which, struct rlimit *limp));
 
 /*
  * Resource controls and accounting.
@@ -62,14 +62,14 @@ int	dosetrlimit __P((struct proc *p, u_int which, struct rlimit *limp));
 /* EN: getpriority system call: query the lowest nice value among processes/process groups/users, returning ESRCH when none is found */
 int
 getpriority(curp, uap, retval)
-	struct proc *curp;
+	struct process *curp;
 	register struct getpriority_args /* {
 		syscallarg(int) which;
 		syscallarg(int) who;
 	} */ *uap;
 	register_t *retval;
 {
-	register struct proc *p;
+	register struct process *p;
 	register int low = PRIO_MAX + 1;
 
 	switch (SCARG(uap, which)) {
@@ -122,7 +122,7 @@ getpriority(curp, uap, retval)
 /* ARGSUSED */
 int
 setpriority(curp, uap, retval)
-	struct proc *curp;
+	struct process *curp;
 	register struct setpriority_args /* {
 		syscallarg(int) which;
 		syscallarg(int) who;
@@ -130,7 +130,7 @@ setpriority(curp, uap, retval)
 	} */ *uap;
 	register_t *retval;
 {
-	register struct proc *p;
+	register struct process *p;
 	int found = 0, error = 0;
 
 	switch (SCARG(uap, which)) {
@@ -183,7 +183,7 @@ setpriority(curp, uap, retval)
 /* EN: Adjust a process's nice value: check permissions, clamp n to PRIO_MIN..PRIO_MAX, require superuser to raise priority, then recompute scheduling priority */
 int
 donice(curp, chgp, n)
-	register struct proc *curp, *chgp;
+	register struct process *curp, *chgp;
 	register int n;
 {
 	register struct pcred *pcred = curp->p_cred;
@@ -209,7 +209,7 @@ donice(curp, chgp, n)
 /* ARGSUSED */
 int
 compat_43_setrlimit(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	struct compat_43_setrlimit_args /* {
 		syscallarg(u_int) which;
 		syscallarg(struct ogetrlimit *) rlp;
@@ -233,7 +233,7 @@ compat_43_setrlimit(p, uap, retval)
 /* ARGSUSED */
 int
 compat_43_getrlimit(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct compat_43_getrlimit_args /* {
 		syscallarg(u_int) which;
 		syscallarg(struct ogetrlimit *) rlp;
@@ -260,7 +260,7 @@ compat_43_getrlimit(p, uap, retval)
 /* ARGSUSED */
 int
 setrlimit(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct setrlimit_args /* {
 		syscallarg(u_int) which;
 		syscallarg(struct rlimit *) rlp;
@@ -280,7 +280,7 @@ setrlimit(p, uap, retval)
 /* EN: Core resource-limit setter: check privileges and caps, copy plimit if shared, clamp and adjust for DATA/STACK/NOFILE/NPROC, then store the new limit */
 int
 dosetrlimit(p, which, limp)
-	struct proc *p;
+	struct process *p;
 	u_int which;
 	struct rlimit *limp;
 {
@@ -367,7 +367,7 @@ dosetrlimit(p, which, limp)
 /* ARGSUSED */
 int
 getrlimit(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct getrlimit_args /* {
 		syscallarg(u_int) which;
 		syscallarg(struct rlimit *) rlp;
@@ -389,7 +389,7 @@ getrlimit(p, uap, retval)
 /* EN: Convert accumulated tick counts into user/system/interrupt CPU time: apportion elapsed real time by tick ratios, compensating the current time slice for curproc */
 void
 calcru(p, up, sp, ip)
-	register struct proc *p;
+	register struct process *p;
 	register struct timeval *up;
 	register struct timeval *sp;
 	register struct timeval *ip;
@@ -445,7 +445,7 @@ calcru(p, up, sp, ip)
 /* ARGSUSED */
 int
 getrusage(p, uap, retval)
-	register struct proc *p;
+	register struct process *p;
 	register struct getrusage_args /* {
 		syscallarg(int) who;
 		syscallarg(struct rusage *) rusage;

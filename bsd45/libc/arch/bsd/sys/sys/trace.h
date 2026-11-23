@@ -101,7 +101,7 @@
 
 #ifdef KERNEL
 #ifdef TRACE
-struct	proc *traceproc;
+struct	process *traceproc;
 int	tracewhich, tracebuf[TRCSIZ];
 u_int	tracex;
 char	traceflags[TR_NFLAGS];

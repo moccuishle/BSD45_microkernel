@@ -34,7 +34,7 @@
  */
 
 #include <sys/param.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/map.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>

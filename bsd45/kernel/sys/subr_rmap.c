@@ -40,7 +40,7 @@
 
 #include <sys/param.h>
 #include <sys/map.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 
 /* 中文：初始化资源映射表（该版本中函数体已删除，仅保留空实现） */
 /* EN: Initialize a resource map (body deleted in this version; empty stub only) */

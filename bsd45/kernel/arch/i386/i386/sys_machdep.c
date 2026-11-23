@@ -41,7 +41,7 @@
 #include <sys/ioctl.h>
 #include <sys/file.h>
 #include <sys/time.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/uio.h>
 #include <sys/kernel.h>
 #include <sys/mtio.h>
@@ -58,7 +58,7 @@ struct vtrace_args {
 /* EN: TRACE-only syscall: validates value against TR_NFLAGS, updates traceflags[] for enable/disable/value, arms vdoualarm for ualarm, logs VTR_STAMP; returns 0 or EINVAL. */
 /* 中文：仅在 TRACE 下编译的系统调用：对 traceflags[] 做使能/禁用/查询并检查 value 在 TR_NFLAGS 内，ualarm 用 timeout 挂 vdoualarm，VTR_STAMP 记跟踪；成功返回 0，参数非法返回 EINVAL。 */
 vtrace(p, uap, retval)
-	struct proc *p;
+	struct process *p;
 	register struct args *uap;
 	int *retval;
 {
@@ -99,7 +99,7 @@ vtrace(p, uap, retval)
 vdoualarm(arg)
 	int arg;
 {
-	register struct proc *p;
+	register struct process *p;
 
 	p = pfind(arg);
 	if (p)

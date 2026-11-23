@@ -1349,7 +1349,7 @@ swfnd:
 _mvesp:	movl	%esp,%eax
 	ret
 /*
- * struct proc *switch_to_inactive(p) ; struct proc *p;
+ * struct process *switch_to_inactive(p) ; struct process *p;
  *
  * At exit of a process, move off the address space of the
  * process and onto a "safe" one. Then, on a temporary stack

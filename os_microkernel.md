@@ -10,7 +10,7 @@
 
 S300 的 `ipc_recv` 对用户线程返回 `-EAGAIN` 轮询；S400 补上真正的会合阻塞：
 
-- `proc.h` 新增续传字段：`uk_ipc_waiting` / `uk_ipc_port` / `uk_ipc_msguser`
+- `kprocess.h` 新增续传字段：`uk_ipc_waiting` / `uk_ipc_port` / `uk_ipc_msguser`
 - `SYS_IPC_RECV`（usermode.c）：队列空且端口有 owner 时，保存完整 syscall 上下文到
   `uk_regs`，登记等待参数，`kthread_block_tcb()` + `proc_sched()` 真正睡眠
 - `SYS_IPC_SEND`：先调 `ipc_deliver_waiter()`，若有阻塞接收者则用 `pipe_copy` 在
@@ -108,7 +108,7 @@ bash tools/test_s400.sh    # 故障注入验收
 - `tools/test_s400.sh`（故障注入测试）、`os_microkernel.md`（本文档）
 
 **修改**
-- `kernel/include/sys/proc.h`（IPC 续传字段）、`kernel/include/sys/kipc.h`
+- `kernel/include/sys/kprocess.h`（IPC 续传字段）、`kernel/include/sys/kipc.h`
 - `kernel/thread/kipc.c`（非阻塞 recv + port_release 故障隔离）
 - `kernel/sys/usermode.c`（`ipc_deliver_waiter` / `ipc_fail_waiters` + syscall 会合）
 - `libc/include/pthread.h`、`libc/src/pthread.c`（用户态 mutex/condvar）

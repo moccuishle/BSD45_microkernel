@@ -42,7 +42,7 @@
 #include <sys/param.h>
 #include <sys/conf.h>
 #include <sys/ioctl.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/user.h>
 #include <sys/tty.h>
 #include <sys/uio.h>
@@ -167,14 +167,14 @@ struct isa_device *dev;
 
 /* ARGSUSED */
 #ifdef __STDC__
-pcopen(dev_t dev, int flag, int mode, struct proc *p)
+pcopen(dev_t dev, int flag, int mode, struct process *p)
 #else
 /* EN: Opens console tty: sets t_oproc=pcstart and t_param=pcparam, initializes termios defaults/watermarks on first open, returns EBUSY for non-root exclusive open, then calls l_open. */
 /* 中文：打开控制台 tty：设 t_oproc=pcstart、t_param=pcparam，首次打开初始化默认 termios 与水位，非 root 独占打开返回 EBUSY，最后调用 l_open。 */
 pcopen(dev, flag, mode, p)
 	dev_t dev;
 	int flag, mode;
-	struct proc *p;
+	struct process *p;
 #endif
 {
 	register struct tty *tp;
@@ -205,7 +205,7 @@ pcopen(dev, flag, mode, p)
 pcclose(dev, flag, mode, p)
 	dev_t dev;
 	int flag, mode;
-	struct proc *p;
+	struct process *p;
 {
 	(*linesw[pccons.t_line].l_close)(&pccons, flag);
 	ttyclose(&pccons);
@@ -262,7 +262,7 @@ pcioctl(dev, cmd, data, flag, p)
 	dev_t dev;
 	int cmd, flag;
 	caddr_t data;
-	struct proc *p;
+	struct process *p;
 {
 	register struct tty *tp = &pccons;
 	register error;

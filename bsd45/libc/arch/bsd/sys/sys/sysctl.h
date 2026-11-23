@@ -45,7 +45,7 @@
 #ifndef KERNEL
 #include <sys/time.h>
 #include <sys/ucred.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <vm/vm.h>
 #endif
 
@@ -169,9 +169,9 @@ struct ctlname {
  * KERN_PROC subtype ops return arrays of augmented proc structures:
  */
 struct kinfo_proc {
-	struct	proc kp_proc;			/* proc structure */
+	struct	process kp_proc;			/* proc structure */
 	struct	eproc {
-		struct	proc *e_paddr;		/* address of proc */
+		struct	process *e_paddr;		/* address of proc */
 		struct	session *e_sess;	/* session pointer */
 		struct	pcred e_pcred;		/* process credentials */
 		struct	ucred e_ucred;		/* current credentials */
@@ -325,14 +325,14 @@ extern struct ctldebug debug15, debug16, debug17, debug18, debug19;
  * the name.
  */
 typedef int (sysctlfn)
-    __P((int *, u_int, void *, size_t *, void *, size_t, struct proc *));
+    __P((int *, u_int, void *, size_t *, void *, size_t, struct process *));
 
 int sysctl_int __P((void *, size_t *, void *, size_t, int *));
 int sysctl_rdint __P((void *, size_t *, void *, int));
 int sysctl_string __P((void *, size_t *, void *, size_t, char *, int));
 int sysctl_rdstring __P((void *, size_t *, void *, char *));
 int sysctl_rdstruct __P((void *, size_t *, void *, void *, int));
-void fill_eproc __P((struct proc *, struct eproc *));
+void fill_eproc __P((struct process *, struct eproc *));
 
 #else	/* !KERNEL */
 #include <sys/cdefs.h>

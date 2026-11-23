@@ -41,7 +41,7 @@
 #include <sys/systm.h>
 #include <sys/resourcevar.h>
 #include <sys/signalvar.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/buf.h>
 #include <sys/vnode.h>
 #include <sys/trace.h>
@@ -58,7 +58,7 @@
 #include <nfs/nfsnode.h>
 
 struct buf *nfs_getcacheblk();
-extern struct proc *nfs_iodwant[NFS_MAXASYNCDAEMON];
+extern struct process *nfs_iodwant[NFS_MAXASYNCDAEMON];
 extern int nfs_numasync;
 extern struct nfsstats nfsstats;
 
@@ -79,7 +79,7 @@ nfs_bioread(vp, uio, ioflag, cred)
 	register int biosize, diff, i;
 	struct buf *bp = 0, *rabp;
 	struct vattr vattr;
-	struct proc *p;
+	struct process *p;
 	struct nfsmount *nmp = VFSTONFS(vp->v_mount);
 	daddr_t lbn, bn, bn2, rabn;
 	caddr_t baddr;
@@ -397,7 +397,7 @@ nfs_write(ap)
 {
 	register int biosize;
 	register struct uio *uio = ap->a_uio;
-	struct proc *p = uio->uio_procp;
+	struct process *p = uio->uio_procp;
 	register struct vnode *vp = ap->a_vp;
 	struct nfsnode *np = VTONFS(vp);
 	register struct ucred *cred = ap->a_cred;
@@ -579,7 +579,7 @@ again:
 			}
 		} else if ((n + on) == biosize &&
 			(nmp->nm_flag & NFSMNT_NQNFS) == 0) {
-			bp->b_proc = (struct proc *)0;
+			bp->b_proc = (struct process *)0;
 			bp->b_flags |= B_ASYNC;
 			(void)nfs_writebp(bp, 0);
 		} else
@@ -602,7 +602,7 @@ nfs_getcacheblk(vp, bn, size, p)
 	struct vnode *vp;
 	daddr_t bn;
 	int size;
-	struct proc *p;
+	struct process *p;
 {
 	register struct buf *bp;
 	struct nfsmount *nmp = VFSTONFS(vp->v_mount);
@@ -630,7 +630,7 @@ nfs_vinvalbuf(vp, flags, cred, p, intrflg)
 	struct vnode *vp;
 	int flags;
 	struct ucred *cred;
-	struct proc *p;
+	struct process *p;
 	int intrflg;
 {
 	register struct nfsnode *np = VTONFS(vp);
@@ -713,7 +713,7 @@ nfs_asyncio(bp, cred)
 		}
 	
 		TAILQ_INSERT_TAIL(&nfs_bufq, bp, b_freelist);
-		nfs_iodwant[i] = (struct proc *)0;
+		nfs_iodwant[i] = (struct process *)0;
 		wakeup((caddr_t)&nfs_iodwant[i]);
 		return (0);
 	    }
@@ -748,7 +748,7 @@ int
 nfs_doio(bp, cr, p)
 	register struct buf *bp;
 	struct ucred *cr;
-	struct proc *p;
+	struct process *p;
 {
 	register struct uio *uiop;
 	register struct vnode *vp;

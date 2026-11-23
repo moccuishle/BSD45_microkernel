@@ -42,7 +42,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/mount.h>
 #include <sys/kernel.h>
 #include <sys/mbuf.h>
@@ -486,7 +486,7 @@ nfs_receive(rep, aname, mp)
 	u_long len;
 	struct mbuf **getnam;
 	int error, sotype, rcvflg;
-	struct proc *p = curproc;	/* XXX */
+	struct process *p = curproc;	/* XXX */
 
 	/*
 	 * Set up arguments for soreceive()
@@ -859,7 +859,7 @@ nfs_request(vp, mrest, procnum, procp, cred, mrp, mdp, dposp)
 	struct vnode *vp;
 	struct mbuf *mrest;
 	int procnum;
-	struct proc *procp;
+	struct process *procp;
 	struct ucred *cred;
 	struct mbuf **mrp;
 	struct mbuf **mdp;
@@ -1432,7 +1432,7 @@ int
 nfs_sigintr(nmp, rep, p)
 	struct nfsmount *nmp;
 	struct nfsreq *rep;
-	register struct proc *p;
+	register struct process *p;
 {
 
 	if (rep && (rep->r_flags & R_SOFTTERM))
@@ -1459,7 +1459,7 @@ nfs_sndlock(flagp, rep)
 	register int *flagp;
 	struct nfsreq *rep;
 {
-	struct proc *p;
+	struct process *p;
 	int slpflag = 0, slptimeo = 0;
 
 	if (rep) {
@@ -1467,7 +1467,7 @@ nfs_sndlock(flagp, rep)
 		if (rep->r_nmp->nm_flag & NFSMNT_INT)
 			slpflag = PCATCH;
 	} else
-		p = (struct proc *)0;
+		p = (struct process *)0;
 	while (*flagp & NFSMNT_SNDLOCK) {
 		if (nfs_sigintr(rep->r_nmp, rep, p))
 			return (EINTR);
@@ -2209,7 +2209,7 @@ nfsrv_wakenfsd(slp)
 /* 中文：通过 tprintf 打印 'nfs server <server>: <msg>'，p 非空时先 tprintf_open 取得进程级句柄、输出后关闭；始终返回 0。 */
 int
 nfs_msg(p, server, msg)
-	struct proc *p;
+	struct process *p;
 	char *server, *msg;
 {
 	tpr_t tpr;

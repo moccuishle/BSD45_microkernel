@@ -1,12 +1,12 @@
 # BSD45 的内核线程与进程实现
 
-> 代码位置：`kernel/thread/kthread.{c,h}`（TCB 池、内核线程、`kswitch` 上下文切换）、`kernel/thread/kswitch.s`、`kernel/sys/usermode.c`（进程表、fork/exec/exit/wait、用户线程、`proc_sched`、`resume_user` 调用）、`kernel/sys/usermode_asm.s`（`resume_user` 与 IRQ0 帧构造）、`kernel/include/sys/proc.h`、`kernel/include/sys/kproc.h`、`kernel/include/sys/platform.h`
+> 代码位置：`kernel/thread/kthread.{c,h}`（TCB 池、内核线程、`kswitch` 上下文切换）、`kernel/thread/kswitch.s`、`kernel/sys/usermode.c`（进程表、fork/exec/exit/wait、用户线程、`proc_sched`、`resume_user` 调用）、`kernel/sys/usermode_asm.s`（`resume_user` 与 IRQ0 帧构造）、`kernel/include/sys/kprocess.h`、`kernel/include/sys/kproc.h`、`kernel/include/sys/platform.h`
 > 一句话：**进程是"资源 + 地址空间的容器"，TCB（`struct kthread`）才是调度单位**；同一进程的所有线程共享页目录，内核线程与用户线程共用同一个 16 槽 TCB 池，区别只在于 `t_proc` 是否为 NULL。
 
 ## 一、两级模型
 
 ```
-                 struct proc（8 个静态槽，procs[NPROC]）
+                 struct process（8 个静态槽，procs[NPROC]）
                  ├── uk_pd          页目录（地址空间）
                  ├── uk_fds[16]     文件描述符表
                  ├── uk_p_vma[8]    mmap 区间
@@ -24,7 +24,7 @@
 
 两条关键规则：
 
-1. **调度走 TCB，不走进程**。`proc_sched()` 遍历 `kthreads[]`，`struct proc` 只提供地址空间和资源。
+1. **调度走 TCB，不走进程**。`proc_sched()` 遍历 `kthreads[]`，`struct process` 只提供地址空间和资源。
 2. **主线程的上下文存在 `proc->uk_regs` 里，不是 TCB 里**（`usermode.c:3652` 注释）。这样 fork/wait/pipe 这些只认进程的老路径完全不用改；只有"额外线程"把上下文放在 `kthread.t_regs`。
 
 ## 二、容量与编号
@@ -115,7 +115,7 @@ _kswitch:            ; void kswitch(unsigned *old_esp, unsigned new_esp)
 - `kthread_block()`：`rq_dequeue(t)`、`t_state = KT_BLOCK`、`sched_on_block()`（记录睡眠）、切回调度器；
 - `kthread_wake(t)`：`t_sleep_ticks++`、`sched_on_wake()`（I/O 加成 + 选量子）、`t_state = KT_RUN`、`rq_enqueue()` 重新入队尾。
 
-## 四、用户进程：`struct proc` 的生命周期
+## 四、用户进程：`struct process` 的生命周期
 
 ### 4.1 分配：`proc_alloc()`
 
@@ -224,14 +224,14 @@ t->t_state = KT_RUN
 
 ## 六、用户态模型与内核态模型的关系
 
-用户态用的是**BSD 进程模型 + POSIX 线程 API**：进程靠 `fork/execve/wait4/exit` 表达，线程靠 `pthread_*` 表达，两者是"容器"和"容器内的执行流"的关系。内核里只有两个真实对象：`struct proc`（资源与地址空间）和 `struct kthread`（唯一可被调度的执行体）。**两套模型不是一一照搬，而是"进程做容器、TCB 做调度"的投影关系。**
+用户态用的是**BSD 进程模型 + POSIX 线程 API**：进程靠 `fork/execve/wait4/exit` 表达，线程靠 `pthread_*` 表达，两者是"容器"和"容器内的执行流"的关系。内核里只有两个真实对象：`struct process`（资源与地址空间）和 `struct kthread`（唯一可被调度的执行体）。**两套模型不是一一照搬，而是"进程做容器、TCB 做调度"的投影关系。**
 
 ```
 用户态 API     fork() execve() wait4() exit()        pthread_create() join() ...
                    │                                        │
 系统调用        2 / 59 / 7 / 1                        440 / 442 / 441 / 445
                    │                                        │
-内核对象     struct proc ◄──────── t_proc ─────────► struct kthread
+内核对象     struct process ◄──────── t_proc ─────────► struct kthread
             （8 槽：地址空间/fd/mmap/estcpu）      （16 槽：内核栈/上下文/优先级）
                    └────── uk_p_threads 链表 ─────► 该进程的全部 TCB
 ```
@@ -254,7 +254,7 @@ t->t_state = KT_RUN
 所以可以写成一条等式：
 
 ```
-一个用户进程 = 1 个 struct proc
+一个用户进程 = 1 个 struct process
              + (1 + n) 个 struct kthread        n = 额外线程数
              + 1 个页目录（uk_pd，被这 1+n 个 TCB 共享）
 
@@ -303,7 +303,7 @@ else                        t->t_state  = KT_BLOCK;    /* 多线程：只阻塞�
 | 但内核线程会拖慢用户线程 | `proc_sched()` 每轮**先 `kthread_run()` 把内核线程队列跑空**，再挑用户线程 |
 | 信号默认是**进程级**的 | 默认动作终止时走 `proc_exit(sig)`，整个进程所有 TCB 一起消失，`wait4` 只看到 `termsig & 0x7f` |
 | 但存在**线程级**信号入口 | `tgkill(tid, sig)`（syscall 451）把信号记到 `t->t_sig`；`sig_deliver()` 把进程待决位与线程待决位取并集，再按**该线程的** `t_sigmask` 过滤。libc 未封装它 |
-| 只有进程有身份 | pid/ppid/pgrp/comm 全在 `struct proc`；线程只有 tid，没有独立身份、没有 tid 级 nice |
+| 只有进程有身份 | pid/ppid/pgrp/comm 全在 `struct process`；线程只有 tid，没有独立身份、没有 tid 级 nice |
 
 ### 6.4 与经典模型的对照
 
@@ -315,7 +315,7 @@ else                        t->t_state  = KT_BLOCK;    /* 多线程：只阻塞�
 | 切换开销 | 用户态跳转，无陷核 | TCB 切换 + 换内核栈；同 `pd` 时不换 CR3 | CR3 重载 + TLB 冲刷 |
 | 上限 | 受用户栈限制 | 16 个 TCB（含 2 个内核线程） | 8 个 proc |
 
-也就是说：**它没有走"用户态线程库 + 内核只认进程"的 N:1 老路，而是每个用户线程都配一个内核栈和一个 TCB 的 1:1 模型**；只是 TCB 池是固定 16 槽的静态数组，且主线程的寄存器备份为了兼容留在了 `struct proc` 里。
+也就是说：**它没有走"用户态线程库 + 内核只认进程"的 N:1 老路，而是每个用户线程都配一个内核栈和一个 TCB 的 1:1 模型**；只是 TCB 池是固定 16 槽的静态数组，且主线程的寄存器备份为了兼容留在了 `struct process` 里。
 
 ### 6.5 代码阅读发现（未运行时验证）
 
@@ -386,13 +386,13 @@ monitor → "usermode" → 进入用户态跑 /sbin/init
 3. **fork 复制整张 fd 表（16 项）**，没有 fd 的惰性共享；`vp->ref++`、管道读写端计数必须手工维护，漏了就会提前 `close`。
 4. **vfork 不是真正的共享地址空间**，是 COW 私有拷贝 + 父阻塞的安全超集（注释里明确写了理由）。
 5. **主线程上下文在 `proc->uk_regs`，其余线程在 `t->t_regs`** —— 这种双存储是为了兼容老代码，代价是每处切换都要判断 `t_tid == uk_pid`。
-6. **调度器只按 TCB 走，但公平性按进程算**（`uk_estcpu` 挂在 `struct proc` 上），避免一个 100 线程的进程拿到 100 倍 CPU。调度细节见 `os_sched.md`。
+6. **调度器只按 TCB 走，但公平性按进程算**（`uk_estcpu` 挂在 `struct process` 上），避免一个 100 线程的进程拿到 100 倍 CPU。调度细节见 `os_sched.md`。
 7. **无内核抢占**：内核态只在系统调用返回的安全点（`need_resched`）才可能切走，内核临界区内绝不切换。
 8. **异常不崩内核**：用户态异常（SIGSEGV 等）只杀掉该进程所有线程、把信号记进 `uk_p_termsig`，让 `wait4` 报 `WIFSIGNALED`。
 
 ## 十一、一句话总结
 
-**进程 = `struct proc`（8 槽，持地址空间/fd/mmap/estcpu），线程 = `struct kthread`（16 槽，持内核栈与上下文）；调度单位是 TCB，地址空间单位是进程。** 内核线程靠 `kthread_spawn` 预置栈帧 + `kswitch` 换栈启动；用户线程靠 `thread_create` 分配 8 KB 独立内核栈与 2 页独立用户栈，靠 `resume_user` 的 `iret` 帧恢复；fork 用 COW 复制地址空间，exec 只换地址空间与返回帧，单线程进程整体阻塞、多线程进程只阻塞单个 TCB。
+**进程 = `struct process`（8 槽，持地址空间/fd/mmap/estcpu），线程 = `struct kthread`（16 槽，持内核栈与上下文）；调度单位是 TCB，地址空间单位是进程。** 内核线程靠 `kthread_spawn` 预置栈帧 + `kswitch` 换栈启动；用户线程靠 `thread_create` 分配 8 KB 独立内核栈与 2 页独立用户栈，靠 `resume_user` 的 `iret` 帧恢复；fork 用 COW 复制地址空间，exec 只换地址空间与返回帧，单线程进程整体阻塞、多线程进程只阻塞单个 TCB。
 
 两套模型的关系一句话：**用户态的"进程/线程"是这两个内核对象的投影 —— 1 个用户进程 = 1 个 `proc` + (1+n) 个 TCB；用户线程与内核线程共用同一个 16 槽 TCB 池，但只有 `proc` 在用户态可见。** 用户态看到的是 BSD 进程语义与 pthread 接口，内核看到的是"一堆 TCB + 它们各自指向的资源容器"。
 

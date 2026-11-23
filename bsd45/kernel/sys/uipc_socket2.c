@@ -35,7 +35,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/file.h>
 #include <sys/buf.h>
 #include <sys/malloc.h>
@@ -333,7 +333,7 @@ sowakeup(so, sb)
 	register struct socket *so;
 	register struct sockbuf *sb;
 {
-	struct proc *p;
+	struct process *p;
 
 	selwakeup(&sb->sb_sel);
 	sb->sb_flags &= ~SB_SEL;

@@ -64,7 +64,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/namei.h>
-#include <sys/proc.h>
+#include <sys/kprocess.h>
 #include <sys/errno.h>
 #include <sys/dkstat.h>
 #include <sys/buf.h>
@@ -145,7 +145,7 @@ int
 vnopen(dev, flags, mode, p)
 	dev_t dev;
 	int flags, mode;
-	struct proc *p;
+	struct process *p;
 {
 	int unit = vnunit(dev);
 
@@ -358,7 +358,7 @@ vnread(dev, uio, flags, p)
 	dev_t dev;
 	struct uio *uio;
 	int flags;
-	struct proc *p;
+	struct process *p;
 {
 
 #ifdef DEBUG
@@ -374,7 +374,7 @@ vnwrite(dev, uio, flags, p)
 	dev_t dev;
 	struct uio *uio;
 	int flags;
-	struct proc *p;
+	struct process *p;
 {
 
 #ifdef DEBUG
@@ -392,7 +392,7 @@ vnioctl(dev, cmd, data, flag, p)
 	u_long cmd;
 	caddr_t data;
 	int flag;
-	struct proc *p;
+	struct process *p;
 {
 	int unit = vnunit(dev);
 	register struct vn_softc *vn;
@@ -538,7 +538,7 @@ vnclear(vn)
 	register struct vn_softc *vn;
 {
 	register struct vnode *vp = vn->sc_vp;
-	struct proc *p = curproc;		/* XXX */
+	struct process *p = curproc;		/* XXX */
 
 #ifdef DEBUG
 	if (vndebug & VDB_FOLLOW)

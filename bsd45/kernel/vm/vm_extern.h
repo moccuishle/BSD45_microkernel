@@ -35,7 +35,7 @@
 
 struct buf;
 struct loadavg;
-struct proc;
+struct process;
 struct vmspace;
 struct vmtotal;
 struct mount;
@@ -47,20 +47,20 @@ void		 chgkprot __P((caddr_t, int, int));
 
 #ifdef KERNEL
 #ifdef TYPEDEF_FOR_UAP
-int		 compat_43_getpagesize __P((struct proc *p, void *, int *));
-int		 madvise __P((struct proc *, void *, int *));
-int		 mincore __P((struct proc *, void *, int *));
-int		 mprotect __P((struct proc *, void *, int *));
-int		 msync __P((struct proc *, void *, int *));
-int		 munmap __P((struct proc *, void *, int *));
-int		 obreak __P((struct proc *, void *, int *));
-int		 sbrk __P((struct proc *, void *, int *));
-int		 smmap __P((struct proc *, void *, int *));
-int		 sstk __P((struct proc *, void *, int *));
+int		 compat_43_getpagesize __P((struct process *p, void *, int *));
+int		 madvise __P((struct process *, void *, int *));
+int		 mincore __P((struct process *, void *, int *));
+int		 mprotect __P((struct process *, void *, int *));
+int		 msync __P((struct process *, void *, int *));
+int		 munmap __P((struct process *, void *, int *));
+int		 obreak __P((struct process *, void *, int *));
+int		 sbrk __P((struct process *, void *, int *));
+int		 smmap __P((struct process *, void *, int *));
+int		 sstk __P((struct process *, void *, int *));
 #endif
 
 void		 assert_wait __P((void *, boolean_t));
-int		 grow __P((struct proc *, vm_offset_t));
+int		 grow __P((struct process *, vm_offset_t));
 void		 iprintf __P((const char *, ...));
 int		 kernacc __P((caddr_t, int, int));
 vm_offset_t	 kmem_alloc __P((vm_map_t, vm_size_t));
@@ -73,18 +73,18 @@ vm_offset_t	 kmem_malloc __P((vm_map_t, vm_size_t, boolean_t));
 vm_map_t	 kmem_suballoc __P((vm_map_t, vm_offset_t *, vm_offset_t *,
 		    vm_size_t, boolean_t));
 void		 loadav __P((struct loadavg *));
-void		 munmapfd __P((struct proc *, int));
+void		 munmapfd __P((struct process *, int));
 int		 pager_cache __P((vm_object_t, boolean_t));
 void		 sched __P((void));
-int		 svm_allocate __P((struct proc *, void *, int *));
-int		 svm_deallocate __P((struct proc *, void *, int *));
-int		 svm_inherit __P((struct proc *, void *, int *));
-int		 svm_protect __P((struct proc *, void *, int *));
+int		 svm_allocate __P((struct process *, void *, int *));
+int		 svm_deallocate __P((struct process *, void *, int *));
+int		 svm_inherit __P((struct process *, void *, int *));
+int		 svm_protect __P((struct process *, void *, int *));
 void		 swapinit __P((void));
-int		 swapon __P((struct proc *, void *, int *));
-void		 swapout __P((struct proc *));
+int		 swapon __P((struct process *, void *, int *));
+void		 swapout __P((struct process *));
 void		 swapout_threads __P((void));
-int		 swfree __P((struct proc *, int));
+int		 swfree __P((struct process *, int));
 void		 swstrategy __P((struct buf *));
 void		 thread_block __P((void));
 void		 thread_sleep __P((void *, simple_lock_t, boolean_t));
@@ -100,10 +100,10 @@ void		 vm_fault_copy_entry __P((vm_map_t,
 		    vm_map_t, vm_map_entry_t, vm_map_entry_t));
 void		 vm_fault_unwire __P((vm_map_t, vm_offset_t, vm_offset_t));
 int		 vm_fault_wire __P((vm_map_t, vm_offset_t, vm_offset_t));
-int		 vm_fork __P((struct proc *, struct proc *, int));
+int		 vm_fork __P((struct process *, struct process *, int));
 int		 vm_inherit __P((vm_map_t,
 		    vm_offset_t, vm_size_t, vm_inherit_t));
-void		 vm_init_limits __P((struct proc *));
+void		 vm_init_limits __P((struct process *));
 void		 vm_mem_init __P((void));
 int		 vm_mmap __P((vm_map_t, vm_offset_t *, vm_size_t,
 		    vm_prot_t, vm_prot_t, int, caddr_t, vm_offset_t));
@@ -111,7 +111,7 @@ int		 vm_protect __P((vm_map_t,
 		    vm_offset_t, vm_size_t, boolean_t, vm_prot_t));
 void		 vm_set_page_size __P((void));
 int		 vm_sysctl __P((int *, u_int, void *, size_t *, void *,
-		    size_t, struct proc *));
+		    size_t, struct process *));
 void		 vmmeter __P((void));
 struct vmspace	*vmspace_alloc __P((vm_offset_t, vm_offset_t, int));
 struct vmspace	*vmspace_fork __P((struct vmspace *));
