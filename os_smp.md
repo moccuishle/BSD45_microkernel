@@ -594,5 +594,43 @@ per-CPU 全局）规避。这个结论**不完整**：它只让那条特定路�
 该队列，`sched_tick` 只读抢占状态，故无需关中断）。`t_onrq` 幂等检查和
 `uk_rq_threads` 记账一并移入临界区。S417 的 per-CPU `ps_mt` 保留作防御。
 
-最终版（S417 + rq 锁）在 VMware 8vCPU 上 `smpon`+`smpuser`+shell，
-`ls`/`cat`/`ps`/`date`/`uname` 混合负载连续通过，TRAP=0。
+S417 + rq 锁在普通负载（`ls`/`cat`/`ps`/`date`/`uname`）下 TRAP=0，
+但 `proctest`（1000 并发子进程）加压又暴露第三处无锁共享状态——scratch
+临时映射窗口，见 §14（S420 每核独立 scratch）。
+
+---
+
+## 14. S420：加压暴露的 scratch 窗口竞态（2026-11-24）
+
+用户要求加压确认（`proctest`，1000 并发子进程）。结果**又复现了 TRAP 12**，
+但这次不在 `proc_sched`，而在 `page_alloc`/`proc_exit`，`cpu=1/2`，
+`cr2=fe202000`——是一片**新的**无锁共享状态。
+
+### 14.1 第三处根因：scratch 临时映射窗口
+
+`SCRATCH_PD/PT/PAGE`（0xFE200000/1000/2000）与 `SCRATCH2_*`（0xFE203000..)
+是**6 个固定 VA 的临时映射窗口**，`map_page()` 每次把不同物理页映射到这些
+VA，调用方随即读写。BKL 本应串行化所有使用者，但插桩计数显示
+**proctest 运行中 54205 次 map_page 有 467 次在 BKL 之外**——AP 的
+`map_page()` 会在 BSP 正使用窗口时把它重指向别的物理页，踩坏页表/TCB。
+（741 行的 `in_zcomp`/`in_fault` 只是防重入标志，跨核不是锁。）
+
+### 14.2 修复：每核独立 scratch 窗口
+
+把 6 个宏改为按 `cpu_id()` 索引：
+`#define SCRATCH_GRP (6*cpu_id())`，各 VA `+ SCRATCH_GRP*0x1000`。
+16 CPU × 6 页 = 384 KB，落在 PDE 0x3F8 的 4 MB 窗口内，止于 0xFE260000，
+低于进程表 0xFE340000；PTE 由 `pmap_map()` 按需安装。共享消失，BKL 漏洞
+不再能造成跨核踩踏。
+
+### 14.3 验证与遗留
+
+- 每核 scratch 版：`proctest` 与普通 ls/cat 负载下**内核 TRAP=0**；
+  普通负载（smpon+smpuser+shell+ls）回归通过。
+- **遗留 1**：proctest 下仍有约 9 个子进程 `user fault sig11 eip=va=80480a7`
+  ——fork 出的子进程第一次取指就缺页，是**多核 fork 页表复制的独立 bug**，
+  与 scratch/TRAP 12 无关，尚未定位。
+- **遗留 2**：连续多次 `vmkeys` 发命令时出现 `foreground was ...` 焦点提示
+  且命令不再生效；对照实验显示共享 scratch 版同样如此，是键盘工具/VMware
+  窗口焦点问题，不是内核死锁（两版 TRAP 均为 0）。
+- 因遗留问题，`smp_user_dispatch` 继续默认 0。

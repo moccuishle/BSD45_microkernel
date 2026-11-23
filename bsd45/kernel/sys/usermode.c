@@ -90,9 +90,19 @@
  * TCB 池 0xFE3C0000 都在同一张页表里更高处。重叠只会静默踩坏内核状态
  * （next_pa 曾被清零），所以 main() 里带显式检查。
  */
-#define	SCRATCH_PD	0xFE200000
-#define	SCRATCH_PT	0xFE201000
-#define	SCRATCH_PAGE	0xFE202000
+/*
+ * S420: scratch windows are PER-CPU.  They are fixed VAs rewritten by
+ * map_page() on every physical-page access; with one shared set, an AP's
+ * map_page() silently repointed the BSP's window mid-use (467 BKL-free
+ * maps out of 54k in a proctest run), scribbling page tables and TCBs.
+ * Each CPU now gets its own group of 6 pages in PDE 0x3F8 (16 CPUs x 6
+ * pages = 384 KB, ending at 0xFE260000, below the process table at
+ * 0xFE340000).  The PTEs are installed on demand by pmap_map().
+ */
+#define	SCRATCH_GRP	(6 * cpu_id())
+#define	SCRATCH_PD	(0xFE200000u + SCRATCH_GRP * 0x1000u)
+#define	SCRATCH_PT	(0xFE201000u + SCRATCH_GRP * 0x1000u)
+#define	SCRATCH_PAGE	(0xFE202000u + SCRATCH_GRP * 0x1000u)
 
 #define	NFD		16
 #define	WNOHANG		1
@@ -2840,9 +2850,10 @@ static int user_ok(unsigned p, unsigned len);
 extern void resume_user(unsigned pd, struct sysregs *r);
 extern int vfs_absolutize(const char *, const char *, char *, unsigned);
 
-#define	SCRATCH2_PD	0xFE203000
-#define	SCRATCH2_PT	0xFE204000
-#define	SCRATCH2_PAGE	0xFE205000
+/* S420: second per-CPU scratch group (see SCRATCH_GRP above). */
+#define	SCRATCH2_PD	(0xFE203000u + SCRATCH_GRP * 0x1000u)
+#define	SCRATCH2_PT	(0xFE204000u + SCRATCH_GRP * 0x1000u)
+#define	SCRATCH2_PAGE	(0xFE205000u + SCRATCH_GRP * 0x1000u)
 
 /*
  * Deep copy of a user address space: new page directory, new page tables
