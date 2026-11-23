@@ -627,10 +627,84 @@ VA，调用方随即读写。BKL 本应串行化所有使用者，但插桩计�
 
 - 每核 scratch 版：`proctest` 与普通 ls/cat 负载下**内核 TRAP=0**；
   普通负载（smpon+smpuser+shell+ls）回归通过。
-- **遗留 1**：proctest 下仍有约 9 个子进程 `user fault sig11 eip=va=80480a7`
-  ——fork 出的子进程第一次取指就缺页，是**多核 fork 页表复制的独立 bug**，
-  与 scratch/TRAP 12 无关，尚未定位。
+- **遗留 1（已由 S421 修复，见 §15）**：proctest 下的子进程
+  `user fault sig11 eip=va=80480a7`，根因是 CR3 缓存失配，不是 fork 页表复制。
 - **遗留 2**：连续多次 `vmkeys` 发命令时出现 `foreground was ...` 焦点提示
   且命令不再生效；对照实验显示共享 scratch 版同样如此，是键盘工具/VMware
   窗口焦点问题，不是内核死锁（两版 TRAP 均为 0）。
 - 因遗留问题，`smp_user_dispatch` 继续默认 0。
+
+---
+
+## 15. S421：AP 子进程 SIGSEGV 的真因——CR3 缓存失配
+
+用户要求继续查 §14.3 遗留 1。这次用"先分流、再抓现场、逐个否证"的方法，
+没有像前几轮那样在栈布局上猜。
+
+### 15.1 分流：是不是 SMP 特有？
+
+| 配置 | 内核 TRAP | user fault |
+|---|---|---|
+| 单核（不 smpon）proctest | 0 | **0** |
+| SMP（smpon+smpuser）proctest | 0 | **19~191（逐轮波动）** |
+
+单核完美通过、SMP 必现且数量波动 → 确是 SMP 竞态，值得查。
+
+### 15.2 抓现场：不是缺页，是 #SS
+
+在 `trap()` 的用户态分支给 trap 12 插桩，一轮拿到全部寄存器：
+
+```
+S421 #SS: cpu2 err=4 eip=80480a7 cs=1f ss=27 cr3=1d2000
+```
+
+- `eip=80480a7` 是 `___syscall` 里 `int $0x80` 之后的第一条 `pop %ebx`，
+  即子进程的 `_exit(0)` 返回点；反汇编 `80480a5: int $0x80; 80480a7: pop %ebx`。
+- `cs=1f`、`ss=27` 是合法的用户 LDT 选择子（TI=1），LDTR=0x18 已加载，正常。
+- **`err=4`、`cr3=1d2000`** —— `1d2000` 是 **IdlePTD（内核页目录）的物理地址**，
+  不是该进程的 `702000`/`724000`。用户态 iret 时 CR3 还停在内核目录 → #SS。
+- 全部发生在 cpu=1/2（AP），单核无。
+
+### 15.3 根因：cur_pd 缓存被 proc_exit 绕过
+
+`cur_pd` 是 per-CPU 缓存（`sched_cpu[cid].sc_cur_pd`），`switch_pd_for()`
+和 `sched_tick()` 都用 `p->uk_pd != cur_pd` 判断要不要切 CR3。但：
+
+- `proc_exit()`（line 4118）直接调 `hal_address_space_activate(IdlePTD)`
+  切到内核目录，**完全绕过 cur_pd 缓存**——CR3 变成 `1d2000`，
+  `cur_pd` 却还记着刚退出进程的用户 pd。
+- 之后 AP 上 clock IRQ 的 `sched_tick()` 选中一个 `p->uk_pd == cur_pd`（缓存
+  命中）的线程，判定"无需切 CR3"，于是 `*r = *regs; iret` 回用户态，
+  但 **CR3 仍是 IdlePTD** → 取指立刻 #SS err=4。
+- 单核上 proc_exit 后总能切到阻塞在 wait4 的父进程、CR3 被正常重设，故不复现。
+
+先后的几个假设都被实验否证（记录在案，避免重走）：
+1. **page_alloc 无锁竞态**：加了 page_lock（next_pa/free_list/refcount）后
+   user fault **未降**（191）→ 否证，改动已还原。
+2. **proc_sched fall-back 到已退出进程**：把条件收紧成
+   `uk_state==P_RUN && uk_pd!=0` 后 user fault **未降**（191）→ 否证，已还原。
+3. **AP 未加载 LDTR / LDT**：现场 `LDTR=0x18` 有效 → 否证。
+
+### 15.4 修复：CR3 判断读真实值
+
+两处判断改为读 `hal_address_space_current()`（真实 CR3）而非缓存：
+- `switch_pd_for()`：用 live CR3 比较，命中时顺手 `cur_pd = live_pd` 重同步；
+- `sched_tick()`：同样用 live CR3，避免 IdlePTD 被误判为"已是目标 PD"。
+
+这样任何绕过缓存直接改 CR3 的路径（proc_exit 的 IdlePTD、以及所有临时
+`activate(save)` 恢复）都不会再让 iret 带着错误 CR3 回用户态。
+
+### 15.5 验证
+
+| 配置 | TRAP | user fault | proctest phase B |
+|---|---|---|---|
+| 修前 SMP（三轮） | 0 | 19 / 57 / 191 | 1000 live |
+| **修后 SMP（三轮）** | 0 / 1 / 0 | **0 / 0 / 0** | 1000 live |
+
+修后三轮 user fault 全为 0，1000 子进程全部驻留。第二轮偶发 1 个 BSP
+TRAP 12（`cpu=0`、崩在 `proc_sched` 尾部 `fe1171a3`、esp 在 TCB 池）——
+那是 §12/§13 的 S417/S418 老问题在极限压力下的偶发复现，与本次 CR3 修复
+（AP、#SS、IdlePTD）表现完全不同，属既有遗留。
+
+`smp_user_dispatch` 仍默认 0：虽然 user fault 已清零，但 BSP TRAP 12 在
+proctest 极限压力下仍偶发，且常规负载样本不足以判定其频率。

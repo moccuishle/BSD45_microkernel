@@ -484,10 +484,22 @@ proc_wake(struct proc *p)
 static unsigned
 switch_pd_for(struct proc *p)
 {
-	if (p->uk_pd != cur_pd) {
+	unsigned live_pd = hal_address_space_current();
+
+	/*
+	 * S421: compare against the LIVE CR3, not the cached cur_pd.
+	 * proc_exit() switches to IdlePTD with a direct
+	 * hal_address_space_activate() that does not touch cur_pd, so the
+	 * cache can claim "already on p's PD" while CR3 actually points at
+	 * the kernel directory.  Returning 0 then makes resume_user keep the
+	 * wrong CR3 and the first user instruction faults #SS (seen only on
+	 * APs running fork children under proctest).
+	 */
+	if (p->uk_pd != live_pd) {
 		cur_pd = p->uk_pd;
 		return (cur_pd);
 	}
+	cur_pd = live_pd;		/* resync cache with reality */
 	return (0);			/* same address space: do not touch CR3 */
 }
 
@@ -3935,10 +3947,14 @@ sched_tick(struct sysregs *r)
 	/* KLT: irq0's iret does not reload CR3, so switch it here —
 	 * but only when the selected thread is from another process.
 	 * Same-process thread switches keep the current page table. */
-	if (p->uk_pd != cur_pd) {
+	/* S421: compare with the live CR3 - proc_exit() may have switched to
+	 * IdlePTD behind cur_pd's back; trusting the cache here would iret to
+	 * user mode with the kernel directory still loaded (#SS err=4). */
+	if (p->uk_pd != hal_address_space_current()) {
 		cur_pd = p->uk_pd;
 		hal_address_space_activate(cur_pd);
-	}
+	} else
+		cur_pd = p->uk_pd;
 	hal_kernel_stack_set(t->t_stack_top);
 	*r = *regs;
 	hal_intr_user_resume(r);
