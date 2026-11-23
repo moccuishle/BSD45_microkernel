@@ -19,26 +19,29 @@
 #include "sys/platform.h"
 
 /*
- * KLT pool (S407/S410): NKTHREAD is the TCB table capacity.  Each slot owns
- * an 8 KB kernel stack mapped in a fixed VA window (KSTACK_VA), so
- * NKTHREAD * 8 KB of kernel VA describes the whole pool:
+ * KLT pool (S407/S410/S411): the TCB table capacity is now a *runtime*
+ * value, nkthread, derived from physmem by mem_plan_init() (one slot per
+ * 4 MB of RAM: 32 at 128 MB, 1024 at 4 GB).  NKTHREAD_MAX is only the
+ * storage/VA ceiling used for static bitmaps; the pool itself is sized at
+ * boot from nkthread.
  *
- *	S410: 1024 slots -> KSTACK_VA 0xFF000000 .. 0xFF800000 (8 MB, three
- *	PDEs).  The old 256-slot/2 MB window at 0xFEA00000 could not grow:
- *	it sat between the page cache and the top of the identity window.
+ * Each slot owns a fixed 16 KB kernel stack (S411: was 8 KB) mapped in the
+ * KSTACK_VA window, so the window is nkthread * 16 KB and never more than
+ * NKTHREAD_MAX * 16 KB = 16 MB:
  *
- * The stacks are filled lazily (kstack_alloc maps slot i on first use), so
- * kthread_prime_stacks() builds the page tables for the upper PDEs at boot -
- * a user page directory copies kernel PDEs when it is created, and slots
- * above 255 are mapped long after that.
- * 每个槽位 8KB 内核栈固定在 KSTACK_VA 窗口；1024 槽即 8MB（三个 PDE）。
- * 原来的 256 槽/2MB 在 0xFEA00000，前后都挤满了无法扩展。栈按需映射，因此
- * boot 时用 kthread_prime_stacks() 先把高地址 PDE 的页表建好——用户页目录是
- * 创建时拷贝内核 PDE 的，255 以上的槽位要开机很久之后才映射。
- * 实际存活上限仍由物理内存经 page_alloc 决定，内存耗尽时 fork/spawn 返回
- * -EAGAIN 而非 panic。1:1 内核线程模型不变。
+ *	0xFC000000 .. 0xFD000000	1024 x 16 KB (four PDEs 0x3f0..0x3f3)
+ *
+ * The window moved down from 0xFF000000 because 16 MB does not fit before
+ * the recursive page-table slot at 0xFFC00000.  0xFC000000 sits below the
+ * kernel image at 0xFE000000 and is copied into every user page directory
+ * (see user_pd_create).
+ * 每个槽位 16KB 内核栈固定在 KSTACK_VA 窗口；1024 槽即 16MB（四个 PDE）。
+ * 从 0xFF000000 下移是因为 16MB 塞不进 0xFFC00000 的递归页表槽之前；
+ * 0xFC000000 在内核镜像 0xFE000000 之下，且会被拷进每个用户页目录。
  */
-#define	NKTHREAD	1024		/* TCB slots = 8 MB / 8 KB stack window */
+#define	NKTHREAD_MAX	1024	/* storage ceiling, not the runtime count */
+extern int	nkthread;	/* runtime TCB slots, set by mem_plan_init() */
+
 
 /*
  * TID namespace partition (pid may reach NPROC now):
@@ -77,8 +80,8 @@
 #define	STARVE_THRESHOLD	40	/* ticks before anti-starvation kicks in */
 #define	CPU_BOUND_THRESHOLD	3	/* consecutive CPU quanta => CPU-bound */
 
-#define	KSTACK_VA	0xFF000000	/* S410: 8 MB, 1024 x 8 KB */
-#define	KSTACK_SIZE	8192
+#define	KSTACK_VA	0xFC000000	/* S411: 16 MB, 1024 x 16 KB */
+#define	KSTACK_SIZE	16384
 
 struct proc;
 

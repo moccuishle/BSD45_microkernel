@@ -33,7 +33,7 @@ qemu="$(find_qemu)" || { echo "qemu-system-i386 not found" >&2; exit 1; }
 log="$(mktemp)"
 trap 'rm -f "$log"; [ -n "${qpid:-}" ] && kill "$qpid" 2>/dev/null' EXIT
 
-"$qemu" -cdrom "$iso" -boot d -m 64 -display none -no-reboot \
+"$qemu" -cdrom "$iso" -boot d -m ${MEM_MB:-128} -display none -no-reboot \
     -serial "tcp:127.0.0.1:$port,server=on,wait=on" -monitor none &
 qpid=$!
 

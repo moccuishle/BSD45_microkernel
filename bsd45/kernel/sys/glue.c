@@ -21,6 +21,7 @@
 #include <vm/vm.h>
 #include <vm/vm_page.h>
 #include <vm/vm_kern.h>
+#include <vm/mem_plan.h>
 
 #include <machine/cpu.h>
 #include <machine/psl.h>
@@ -338,6 +339,16 @@ main(vm_offset_t firstaddr)
 	 * 内核长大后不会把自己的页当空闲页发出去。
 	 */
 	page_alloc_set_floor((unsigned)firstaddr);
+
+	/*
+	 * S411: turn the BIOS-reported RAM into one plan (heap caps, mmap,
+	 * TCB slots).  Must run before page_ref_init()/kthread_init(), which
+	 * size their tables from nkthread and mem_phys_limit.
+	 * S411：把 BIOS 探测到的内存换算成统一规划（堆上限、mmap、TCB 槽数）。
+	 * 必须在 page_ref_init()/kthread_init() 之前，它们按 nkthread 与
+	 * mem_phys_limit 定容。
+	 */
+	mem_plan_init();
 
 	/*
 	 * COW refcount table, sized from the BIOS-reported physmem.  Must run

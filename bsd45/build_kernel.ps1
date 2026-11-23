@@ -282,6 +282,7 @@ $c_sources = [ordered]@{
     "ctx.o"      = @("c",   "$ws\kernel\arch\$Arch\ctx.c")
     "timer.o"    = @("c",   "$ws\kernel\arch\$Arch\timer.c")
     "zcomp.o"    = @("c",   "$ws\kernel\vm\zcomp.c")
+    "mem_plan.o" = @("c",   "$ws\kernel\vm\mem_plan.c")
     "aio.o"      = @("c",   "$ws\kernel\fs\aio.c")
     "vfs_bio.o"  = @("c",   "$ws\kernel\fs\vfs_bio.c")
     "vfs_cache.o" = @("c",  "$ws\kernel\fs\vfs_cache.c")

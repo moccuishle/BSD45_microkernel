@@ -223,6 +223,7 @@ sources=(
     "c:$src/arch/$ARCH/ctx.c"
     "c:$src/arch/$ARCH/timer.c"
     "c:$src/vm/zcomp.c"
+    "c:$src/vm/mem_plan.c"
     "c:$src/fs/aio.c"
     "c:$src/fs/vfs_bio.c"
     "c:$src/fs/vfs_cache.c"

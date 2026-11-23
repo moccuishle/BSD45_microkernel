@@ -46,7 +46,8 @@
   `uk_pd`、fd 表、信号、mmap、线程链表 `uk_p_threads`；BSD 原字段保留以兼容
   genassym/machdep。
 - `struct kthread`（`kernel/thread/kthread.{c,h}`）：内核线程 = 唯一调度单位；
-  每线程独立 8 KiB 内核栈（`KSTACK_VA`）、独立用户栈、TCB 含上下文/状态/优先级。
+  每线程独立 16 KiB 内核栈（`KSTACK_VA`）、2 MiB 用户栈、TCB 含上下文/状态/优先级；
+  线程数与堆/mmap 由启动内存规划按总内存动态推导（S411）。
 - 显式 run queue（TCB 入/出队）、`proc_sched()`/`sched_tick()` 调度器。
 - 20 级优先级（0 最低 / 19 最高）：高优先级抢占低优先级；优先级继承
   （`prio_inherit`/`prio_restore`，含传递链，join 场景接入，释放后恢复）。

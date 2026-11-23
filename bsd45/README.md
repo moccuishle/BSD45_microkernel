@@ -250,7 +250,7 @@ Linux 上 `gcc -m32` 直接产出 ELF，`build_*.sh` 用 `ld -m elf_i386` 和
   mmap、以及线程链表 `uk_p_threads`。旧的 BSD `p_*` 字段保留在前面，避免
   genassym/machdep 的偏移失效；运行时字段在尾部，用 `uk_` 前缀。
 - `struct kthread` 通过 `t_proc` 归属一个进程、`t_next` 挂进该进程的线程链表；
-  每个线程有独立 8 KiB 内核栈。
+  每个线程有独立 16 KiB 内核栈和 2 MiB 用户栈（S411），页面按需分配。
 - 调度器只认 **TCB**，不认进程：显式 run queue（TCB 入/出队），
   `fair_pick_next()` 先选 CPU 记账最小（`uk_estcpu`，BSD 式衰减）的**进程**，
   再在其线程里轮转——一个进程开 100 个线程也不会拿到 100 份 CPU。每线程

@@ -28,7 +28,7 @@ log="$("$ws/tools/run_qemu_test.sh" -Iso "$iso" \
     -Keys "kthread|softirq|kthreadtest|softirqtest|kthread" \
     -WaitFor "softirqtest: PASS" -TimeoutSec 60)"
 
-check "stacks"      "$log" "kthread: 16 thread slots at"
+check "stacks"      "$log" "thread slots at fc000000" "16 KB stacks"
 check "soft thread" "$log" "kthread: spawn softirq"
 check "thread test" "$log" "kthreadtest: counter 3 PASS"
 check "softirq test" "$log" "softirqtest: count 1 PASS"

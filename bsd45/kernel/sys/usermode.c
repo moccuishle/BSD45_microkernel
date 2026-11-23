@@ -27,6 +27,7 @@
 #include <vm/vm.h>
 #include <vm/vm_page.h>
 #include <vm/vm_kern.h>
+#include <vm/mem_plan.h>
 
 #include <machine/cpu.h>
 #include <machine/pmap.h>
@@ -47,14 +48,33 @@
 
 #define	USER_LOAD	0x08048000
 #define	USER_STACK_TOP	0xBFC00000
-#define	USER_STACK_SIZE	0x8000
+#define	USER_STACK_SIZE	0x200000	/* S411: fixed 2 MB user stack */
 #define	PG_COW		0x00000200	/* software COW marker (PG_FOD bit) */
 #define	PG_ZCOMP	0x00000400	/* not-present compressed-page entry */
 #define	USER_ARG_PAGE	(USER_STACK_TOP - PAGE_SIZE)
 #define	USER_ARGS_MAX	4096
 
 #define	USER_HEAP_START	0x09000000
-#define	USER_HEAP_MAX	0x0C000000
+/*
+ * S411: per-thread user stacks are 2 MB each and live in a dedicated 32 MB
+ * window (16 tid slots, matching TID_STRIDE).  Stack pages are demand-paged.
+ * S411：每线程 2MB 用户栈，放在 32MB 专用窗口（16 个 tid 槽，对应
+ * TID_STRIDE），页面按需分配。
+ */
+#define	UTHREAD_STACK_BASE	0xB0000000
+#define	UTHREAD_STACK_SIZE	0x200000
+#define	UTHREAD_STACKS		16
+/*
+ * User address space ends at 0xC0000000 (PDE 0x300).  Everything at or
+ * above 0x300 is a kernel window shared into every user PD, so fork/exit
+ * must neither copy nor free those PDEs.  S411 moved the process table and
+ * the stack pool below the old 0x3f6 boundary, which made this distinction
+ * load-bearing.
+ * 用户地址空间到 0xC0000000（PDE 0x300）为止；0x300 以上全是内核共享窗口，
+ * fork/exit 都不能复制或释放。S411 把进程表/栈池移到旧 0x3f6 边界以下，
+ * 这条边界因此变得关键。
+ */
+#define	USER_PDE_LIMIT		0x300
 
 /*
  * Scratch mapping window.  These three pages are rewritten by map_page() on
@@ -180,8 +200,6 @@ static int	ps_snap_len;
 #define	PROT_READ	0x01
 #define	PROT_WRITE	0x02
 #define	PROT_EXEC	0x04
-#define	MMAP_BASE	0x10000000
-#define	MMAP_LIMIT	0x30000000
 #define	MMAP_MAXLEN	0x400000	/* 4 MB per mapping */
 #define	NMAP		KPROC_NMAP
 
@@ -287,29 +305,37 @@ static int	ps_snap_len;
  *     execve read argc 0, which is why S408 moved it to 0xFE340000;
  *   - 1024 slots need 1.77 MB, which does not fit the 768 KB gap between the
  *     zcomp pool and the CD window any more (S410).
- * So the table now lives above 0xFEC00000, in kernel windows whose page
- * tables are shared into every user page directory (see user_pd_create):
+ * So the table now lives at 0xFB000000, below the kernel image, in a kernel
+ * window whose page table is shared into every user page directory (see
+ * user_pd_create).  S411 moved it down from 0xFED00000 to make room for the
+ * 2 MB COW table that covers 4 GB of RAM:
  *
- *   0xFEC00000  1 MB   COW refcount table (16-bit entries, 2 GB of RAM)
- *   0xFED00000  1.77M  this process table (1024 x 1808)
+ *   0xFB000000  1.77M  this process table (1024 x 1808)
+ *   0xFC000000  16 MB  kernel stacks, 1024 x 16 KB (kthread.h)
  *   0xFEF00000  1 MB   TCB pool (kernel/thread/kthread.h)
- *   0xFF000000  8 MB   kernel stacks, 1024 x 8 KB (kthread.h)
+ *   0xFEC00000  2 MB   COW refcount table (16-bit entries, 4 GB of RAM)
  *
  * None of these can collide with a CD image, a page-cache page or a user
  * mapping, and they sit above the 12 MB identity window locore builds.
  * 进程表放在内核 VA 窗口而不是 .bss，正是这一点让 NPROC 摆脱了引导器 0x90000
  * 的天花板；kern_table_alloc() 返回一段连续内存，procs[i] 语义不变。
- * 地址有两个讲究：一不能落在 CD_IMAGE_VA（0xFE400000 起 4MB，cd_map() 每次
- * exec 都重映射）里——S408 之前表在 0xFE400000 导致 execve 拿到 argc 0；二
- * 1024 个槽要 1.77MB，已塞不进 zcomp 池与 CD 窗口之间那 768KB（S410）。
- * 因此表搬到 0xFEC00000 以上，那几段的页表会被拷进每个用户页目录（见
- * user_pd_create）；它们既不与 CD 映像/页缓存/用户映射冲突，也在 locore 建的
- * 12MB 恒等映射窗口之上。
+ * S411 把表从 0xFED00000 下移到 0xFB000000，腾出空间给覆盖 4GB 的 2MB COW 表；
+ * 这些窗口的页表都会拷进每个用户页目录（见 user_pd_create）。
  */
-#define	PROC_TABLE_VA	0xFED00000
+#define	PROC_TABLE_VA	0xFB000000
 static struct proc	*procs;
 static struct proc	*cur;		/* current process (kernel object) */
 static struct kthread	*cur_thread;	/* current execution flow */
+/*
+ * S411: user VA layout, derived from the boot memory plan instead of the
+ * old fixed 48 MB heap / 512 MB mmap constants.  Defaults match a 128 MB
+ * machine so the values are sane before proc_table_init() runs.
+ * S411：用户地址空间布局由启动内存规划推导，默认值对应 128MB。
+ */
+static unsigned	user_heap_max = USER_HEAP_START + (64u * 1024u * 1024u);
+static unsigned	mmap_base = USER_HEAP_START + (64u * 1024u * 1024u);
+static unsigned	mmap_limit = USER_HEAP_START + (80u * 1024u * 1024u);
+static void	user_layout_init(void);
 /* KVFS: forward declaration of the in-flight forwarding waiter (defined in
  * the KVFS section below) so port-release fault isolation can reach it. */
 static struct proc *kvfs_waiter;
@@ -377,7 +403,7 @@ proc_wake(struct proc *p)
 	if (p == 0)
 		return;
 	p->uk_state = P_RUN;
-	for (i = 0; i < NKTHREAD; i++) {
+	for (i = 0; i < nkthread; i++) {
 		t = &kthreads[i];
 		if (t->t_used && t->t_proc == p && t->t_state == KT_BLOCK) {
 			t->t_sleep_ticks++;	/* account wake from sleep/I/O */
@@ -557,8 +583,8 @@ static unsigned page_nalloc, page_nfree, page_ninuse;
  * 窗口 1MB，即 1MB/2 = 524288 页 = 2GB 内存；更大的 guest 需要 2MB 窗口，而
  * 0xFEC00000 以上已经没有空间（见 PROC_TABLE_VA 处的表的 VA 图）。
  */
-#define	PAGE_REF_VA	0xFEC00000	/* 1 MB window: 2 bytes/page -> 2 GB */
-#define	PAGE_REF_MAX	(1u * 1024 * 1024 / 2)	/* entries, not bytes */
+#define	PAGE_REF_VA	0xFEC00000	/* S411: 2 MB window: 2 B/page -> 4 GB */
+#define	PAGE_REF_MAX	(2u * 1024 * 1024 / 2)	/* entries, not bytes */
 static unsigned short	*page_ref;	/* one refcount per physical page */
 static unsigned	page_ref_pages;		/* entries actually mapped */
 unsigned	cow_faults;
@@ -810,30 +836,14 @@ page_alloc(void)
 		panic("usermode: page_alloc before page_alloc_set_floor");
 	next_pa += PAGE_SIZE;
 	/*
-	 * Dynamic ceiling (was hard-coded 0x3f000000 = ~63MB).  physmem is the
-	 * BIOS-reported page count, so physmem<<12 is the top of usable RAM.
-	 * Keep a conservative 1 MB guard below the top for the bootstrap/msgbuf
-	 * area, and never fall below the legacy 63 MB so the original 64 MB
-	 * guest (and the COW table that covers its first 64 MB) behaves exactly
-	 * as before.  A VMware VM given 512 MB therefore raises the ceiling and
-	 * allows many more live processes.
-	 * 动态上界（原为写死的 0x3f000000≈63MB）。physmem 为 BIOS 探测页数，
-	 * physmem<<12 即可用 RAM 顶端。顶端下方留 1MB 保护带；且不低于原 63MB，
-	 * 保证原 64MB guest 行为不变。VMware 加大内存即抬高上界、可容纳更多进程。
+	 * Ceiling comes from the boot memory plan (S411), which uses 64-bit
+	 * arithmetic on the BIOS/E801 page count.  The old `physmem << 12`
+	 * expression wrapped to 0 on a 4 GB guest and disabled the check.
+	 * 上界来自启动内存规划（S411），用 64 位运算处理 BIOS/E801 页数；
+	 * 旧的 `physmem << 12` 在 4GB guest 上会回绕成 0，等于取消检查。
 	 */
-	{
-		unsigned ceiling = 0x3f000000u;	/* legacy floor / 历史下限 */
-
-		if (physmem > 0) {
-			unsigned dyn = (physmem << 12);
-			if (dyn > (0x100000u + 0x100000u))	/* at least 2 MB */
-				dyn -= 0x100000u;		/* 1 MB guard */
-			if (dyn > ceiling)
-				ceiling = dyn;
-		}
-		if (next_pa >= ceiling)
-			panic("usermode: out of physical memory");
-	}
+	if ((unsigned long long)next_pa >= (unsigned long long)mem_phys_limit)
+		panic("usermode: out of physical memory");
 	page_nalloc++;
 	page_ninuse++;
 	page_ref_set(pa, 1);
@@ -889,7 +899,7 @@ free_address_space(unsigned pdpa)
 	unsigned *pd = map_page(SCRATCH_PD, pdpa);
 	int i, j;
 
-	for (i = 0; i < 0x3f6; i++) {
+	for (i = 0; i < USER_PDE_LIMIT; i++) {
 		unsigned *pt;
 
 		if ((pd[i] & PG_V) == 0)
@@ -944,18 +954,16 @@ user_pd_create(void)
 	for (i = 0; i < PAGE_SIZE / 4; i++)
 		pd[i] = 0;
 	/*
-	 * Share the kernel windows: 0x3f6..0x3fa were the original set, and
-	 * S410's tables live in 0x3fb (COW refcounts, process table, TCB pool)
-	 * and 0x3fc/0x3fd (1024 kernel stacks).  A user page directory that
-	 * did not get those PDEs would fault the moment a thread with a high
-	 * TCB slot ran - the stacks are filled lazily, so slots above 255 are
-	 * only mapped after boot, long after this copy.
-	 * 共享内核窗口：0x3f6..0x3fa 是原来的范围，S410 的表在 0x3fb（COW 引用
-	 * 计数、进程表、TCB 池）与 0x3fc/0x3fd（1024 个内核栈）。若用户页目录没
-	 * 拷到这些 PDE，高槽位 TCB 第一次运行时就会缺页——栈是按需映射的，255 以上
-	 * 的槽位在开机很久之后才建立，晚于这次拷贝。
+	 * Share the kernel windows: 0x3f6 was the original recursive-PTD
+	 * window, S410's tables live in 0x3fb, and S411 adds 0x3ec (process
+	 * table at 0xfb000000) and 0x3f0..0x3f3 (16 MB kernel stack pool at
+	 * 0xfc000000).  A user page directory that did not get those PDEs
+	 * would fault on its first user thread or process.
+	 * 共享内核窗口：0x3f6 是原有递归 PTD 窗口，0x3fb 是 S410 的表；
+	 * S411 增加 0x3ec（0xfb000000 进程表）与 0x3f0..0x3f3（0xfc000000 起的
+	 * 16MB 内核栈池）。用户页目录漏拷任何一个，第一次创建用户线程就会缺页。
 	 */
-	for (i = 0x3f6; i <= 0x3fd; i++)
+	for (i = 0x3ec; i <= 0x3fd; i++)
 		pd[i] = ((unsigned *)kernel_pmap->pm_pdir)[i];
 	return (pdpa);
 }
@@ -1197,7 +1205,7 @@ do_mmap(unsigned addr, unsigned len, int prot, int flags, int fd)
 	}
 	if (flags & MAP_FIXED) {
 		start = addr;
-		if (start < MMAP_BASE || start + len > MMAP_LIMIT ||
+		if (start < mmap_base || start + len > mmap_limit ||
 		    vma_overlaps(cur, start, len)) {
 			if (vp)
 				vn_put(vp);
@@ -1206,7 +1214,7 @@ do_mmap(unsigned addr, unsigned len, int prot, int flags, int fd)
 	} else {
 		start = (cur->uk_p_mmap_base + PAGE_SIZE - 1) &
 		    ~(PAGE_SIZE - 1);
-		if (start + len > MMAP_LIMIT) {
+		if (start + len > mmap_limit) {
 			if (vp)
 				vn_put(vp);
 			return (-ENOMEM);
@@ -1774,7 +1782,7 @@ zcomp_reclaim(int n)
 		return (0);
 	in_zcomp = 1;
 	pd = map_page(SCRATCH_PD, cur->uk_pd);
-	for (i = 0; i < 0x3f6 && n > 0; i++) {
+	for (i = 0; i < USER_PDE_LIMIT && n > 0; i++) {
 		unsigned *pt;
 		unsigned pte;
 
@@ -1929,7 +1937,7 @@ mmap_teardown(struct proc *p)
 			vn_put(v->vp);
 		bzero(v, sizeof(*v));
 	}
-	p->uk_p_mmap_base = MMAP_BASE;
+	p->uk_p_mmap_base = mmap_base;
 }
 
 /* 中文：把 ELF 映像的 PT_LOAD 段按程序头逐页映射到指定页目录，设置保护权限并回写入口地址 */
@@ -2800,7 +2808,7 @@ copy_address_space(unsigned srcpd)
 	unsigned *dpd = map_page(SCRATCH2_PD, dstpd);
 	int i, j;
 
-	for (i = 0; i < 0x3f6; i++) {
+	for (i = 0; i < USER_PDE_LIMIT; i++) {
 		unsigned *spt, *dpt;
 		unsigned dptpa;
 
@@ -2846,7 +2854,7 @@ copy_address_space_cow(unsigned srcpd)
 	unsigned *dpd = map_page(SCRATCH2_PD, dstpd);
 	int i, j;
 
-	for (i = 0; i < 0x3f6; i++) {
+	for (i = 0; i < USER_PDE_LIMIT; i++) {
 		unsigned *spt, *dpt;
 		unsigned dptpa;
 
@@ -2897,7 +2905,10 @@ demand_page(unsigned va)
 		;			/* heap */
 	else if (page >= USER_STACK_TOP - USER_STACK_SIZE &&
 	    page < USER_STACK_TOP)
-		;			/* stack */
+		;			/* main 2 MB stack (S411) */
+	else if (page >= UTHREAD_STACK_BASE &&
+	    page < UTHREAD_STACK_BASE + UTHREAD_STACKS * UTHREAD_STACK_SIZE)
+		;			/* per-thread 2 MB stack (S411) */
 	else
 		return (0);
 	pa = page_alloc();
@@ -2996,12 +3007,48 @@ proc_add_thread(struct proc *p, int tid)
 
 /* 中文：分配一个空闲进程槽并初始化：设置 cwd、mmap 基址及 0/1/2 三个控制台 fd，返回进程指针或 0 */
 /* EN: Allocate and init a free process slot: set cwd, mmap base and console fds 0/1/2, returning its pointer or 0 */
+/*
+ * S411: derive the user heap and mmap windows from the boot memory plan.
+ *
+ * heap   = [USER_HEAP_START, USER_HEAP_START + addressable/2)
+ * mmap   = [heap_end, heap_end + addressable/8)
+ * stacks = [UTHREAD_STACK_BASE, +32 MB) and the main 2 MB stack at the top
+ *
+ * All three are address-space caps; pages are demand-paged.  The clamp
+ * below UTHREAD_STACK_BASE keeps a 24 GB policy from producing a 12 GB
+ * heap that this 32-bit port could never map.
+ * S411：由内存规划推导用户堆与 mmap 窗口，全部是地址空间上限，页按需分配。
+ */
+static void
+user_layout_init(void)
+{
+	unsigned base_kb, heap_bytes, mmap_bytes, max_heap;
+
+	base_kb = mem_plan.addressable_kb;
+	heap_bytes = (base_kb / 2u) * 1024u;
+	mmap_bytes = (base_kb / 8u) * 1024u;
+	max_heap = UTHREAD_STACK_BASE - USER_HEAP_START - 0x100000u;
+	if (heap_bytes > max_heap)
+		heap_bytes = max_heap;
+	user_heap_max = USER_HEAP_START + heap_bytes;
+	mmap_base = (user_heap_max + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+	if (mmap_base >= UTHREAD_STACK_BASE)
+		mmap_bytes = 0;
+	else if (mmap_bytes > UTHREAD_STACK_BASE - mmap_base)
+		mmap_bytes = UTHREAD_STACK_BASE - mmap_base;
+	mmap_limit = mmap_base + mmap_bytes;
+	printf("usermode: user VA heap %x-%x (%d MB), mmap %x-%x (%d MB)\n",
+	    USER_HEAP_START, user_heap_max, (int)(heap_bytes >> 20),
+	    mmap_base, mmap_limit, (int)(mmap_bytes >> 20));
+}
+
 /* 中文：进程表初始化：清零静态进程表（保留此入口以便引导顺序不变） */
 /* EN: Process table init: zero the static table (kept as an entry point so the boot order is unchanged). */
 void
 proc_table_init(void)
 {
 
+	user_layout_init();
 	procs = (struct proc *)kern_table_alloc((unsigned)PROC_TABLE_VA,
 	    (unsigned)NPROC * (unsigned)sizeof(struct proc));
 	printf("usermode: %d proc slots at %x (%d KB)\n", NPROC,
@@ -3020,7 +3067,7 @@ proc_alloc(void)
 			bzero(&procs[i], sizeof(procs[i]));
 			procs[i].uk_p_cwd[0] = '/';
 			procs[i].uk_p_cwd[1] = 0;
-			procs[i].uk_p_mmap_base = MMAP_BASE;
+			procs[i].uk_p_mmap_base = mmap_base;
 			for (fd = 0; fd < 3; fd++) {
 				procs[i].uk_fds[fd].used = 1;
 				procs[i].uk_fds[fd].type = FD_CONSOLE;
@@ -3127,7 +3174,7 @@ proc_sched(void)
 		 * user thread names its address-space container through
 		 * t_proc; run state still lives on the process for now.
 		 */
-		for (i = 0; i < NKTHREAD; i++) {
+		for (i = 0; i < nkthread; i++) {
 			struct kthread *t = &kthreads[i];
 			struct proc *p;
 			struct sysregs *regs;
@@ -3232,7 +3279,7 @@ estcpu_loadavg(void)
 {
 	int i, n = 0;
 
-	for (i = 0; i < NKTHREAD; i++)
+	for (i = 0; i < nkthread; i++)
 		if (tcb_runnable(&kthreads[i]))
 			n++;
 	return (n < 1 ? 1 : n);
@@ -3310,8 +3357,8 @@ fair_pick_next(struct kthread *me)
 	int best_prio = -1, i, start;
 
 	start = (me != 0) ? (me - kthreads) : 0;
-	for (i = 0; i < NKTHREAD; i++) {
-		struct kthread *t = &kthreads[(start + i + 1) % NKTHREAD];
+	for (i = 0; i < nkthread; i++) {
+		struct kthread *t = &kthreads[(start + i + 1) % nkthread];
 		int prio;
 
 		if (t == me || !tcb_runnable(t))
@@ -3375,7 +3422,7 @@ sched_tick(struct sysregs *r)
 	/* anti-starvation: every waiting-but-runnable thread ages upward */
 	{
 		int j;
-		for (j = 0; j < NKTHREAD; j++)
+		for (j = 0; j < nkthread; j++)
 			if (kthreads[j].t_used && kthreads[j].t_state == KT_RUN &&
 			    &kthreads[j] != me &&
 			    kthreads[j].t_starve < STARVE_THRESHOLD * 2)
@@ -3619,7 +3666,7 @@ user_fault(int sig, unsigned eip, unsigned va)
 	    cur->uk_pid, sig, eip, va);
 	cur->uk_p_termsig = sig;
 	/* a thread-fatal signal ends the whole process (os.md 9.2/9.4) */
-	for (i = 0; i < NKTHREAD; i++) {
+	for (i = 0; i < nkthread; i++) {
 		struct kthread *t = &kthreads[i];
 
 		if (t->t_used && t->t_proc == cur && t->t_tid != cur->uk_pid) {
@@ -4405,15 +4452,24 @@ thread_create(struct sysregs *r)
 	int tid;
 	unsigned sva, top;
 
+	/*
+	 * S411: each extra thread owns a fixed 2 MB user stack slot.  The
+	 * slot is derived from the low tid bits and pages are demand-paged,
+	 * so creating a thread costs no stack memory until it runs.  More
+	 * than UTHREAD_STACKS threads per process would alias slots, so the
+	 * 16-slot window is also the per-process thread cap (TID_STRIDE=16).
+	 * S411：每个线程固定 2MB 用户栈槽，按 tid 低位取槽，页按需分配；
+	 * 超过 16 个线程会槽位重叠，因此 16 槽窗口同时是单进程线程上限。
+	 */
+	if (cur->uk_p_nthreads >= UTHREAD_STACKS)
+		return (-EAGAIN);
 	tid = cur->uk_p_next_tid++;
 	if (r->edx != 0)
 		top = r->edx;
 	else {
-		/* per-thread user stack: 2 pages below the main stack */
-		sva = 0xBFA00000u + ((unsigned)(tid & 0xf) << 16);
-		user_map(cur->uk_pd, sva, page_alloc());
-		user_map(cur->uk_pd, sva + PAGE_SIZE, page_alloc());
-		top = sva + 2 * PAGE_SIZE - 16;
+		sva = UTHREAD_STACK_BASE +
+		    ((unsigned)(tid & (UTHREAD_STACKS - 1)) * UTHREAD_STACK_SIZE);
+		top = sva + UTHREAD_STACK_SIZE - 16;
 	}
 	t = kthread_user_spawn(cur, tid);
 	if (t == 0)
@@ -4455,7 +4511,7 @@ thread_exit_current(int code)
 	/* release inherited priority: the resource (this thread) is done */
 	prio_restore(t);
 	cur->uk_p_nthreads--;
-	for (i = 0; i < NKTHREAD; i++) {
+	for (i = 0; i < nkthread; i++) {
 		struct kthread *j = &kthreads[i];
 
 		if (!j->t_used || j->t_join_tid != t->t_tid)
@@ -5063,7 +5119,7 @@ bsd45_syscall(struct sysregs *r)
 	case 17: {			/* break(addr) */
 		unsigned a = r->ebx;
 
-		if (a < USER_LOAD || a > USER_HEAP_MAX) {
+		if (a < USER_LOAD || a > user_heap_max) {
 			r->eax = (unsigned)-EINVAL;
 			break;
 		}
@@ -6117,7 +6173,7 @@ start_prog(const char *path, const char *script)
 	cur->uk_ppid = 0;
 	cur->uk_pd = pd;
 	cur->uk_brk_mapped = USER_HEAP_START;
-	cur->uk_p_mmap_base = MMAP_BASE;
+	cur->uk_p_mmap_base = mmap_base;
 	cur->uk_p_cwd[0] = '/';
 	cur->uk_p_cwd[1] = 0;
 	proc_setcomm(cur, path);

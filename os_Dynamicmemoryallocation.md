@@ -1,6 +1,6 @@
 # 动态进程/线程分配（Level B 设计文档）
 
-> 状态：设计中（2026-11-21）。目标是把静态进程表 `procs[8]` 与静态线程池 `kthreads[16]` 改成动态分配，使进程数上限由物理内存决定，而不是被硬编码常量锁死。
+> 状态：**S407/S410 已落地；S411 动态线程/内存规划已落地（2026-11-23）**。目标是把静态进程表 `procs[8]` 与静态线程池 `kthreads[16]` 改成动态分配，使进程数上限由物理内存决定，而不是被硬编码常量锁死。
 > 测试环境：**VMware**（用户 2026-11-21 明确要求：仅在 VMware 中测试，不再用 QEMU）。
 
 ---
@@ -659,3 +659,105 @@ mem: 2951 pages in use, 52017 allocated, next free 2508000
 - `kernel/arch/i386/i386/pmap.c`：`pmap_enter()` 缺页表 panic
 - `kernel/sys/glue.c`：`main()` 里调用 `kthread_prime_stacks()`
 - `libexec/proctest.c`：1000 并发、阻塞式子进程、phase C 125MB
+
+---
+
+## 11. S411：按动态内存规划线程数与堆/mmap（2026-11-23）
+
+### 11.1 目标与硬约束
+
+- **内存容量不写死**：启动时由 BIOS/E801 → `physmem` 页数识别，128MB～24GB
+  都走同一套公式；以后加内存到 6/8/12/16/20/24GB 不需要改策略代码。
+- **线程栈固定**：每个线程 16KB 内核栈 + 2MB 用户栈，页面按需分配。
+- **保持 KLT 1:1**：`struct proc` 仍是资源/地址空间容器，`struct kthread` 仍是
+  唯一调度单位；TCB 池、tid 分区、run queue 语义不变。
+
+### 11.2 规划公式（3:4:1 + 每 4MB 一个线程）
+
+```
+total    = roundup(detected RAM, 4MB)，夹在 [128MB, 24GB]
+kheap    = total * 3/8      # 4GB → 1536MB，128MB → 48MB
+uheap    = total * 1/2      # 4GB → 2048MB，128MB → 64MB
+mmap     = total * 1/8      # 4GB →  512MB，128MB → 16MB
+threads  = total / 4MB      # 4GB → 1024，128MB → 32
+```
+
+`memplan` 命令实测表（引导后在 monitor 输入）：
+
+```
+mem:  MB   kheap   uheap    mmap  threads
+mem:  128    48    64    16   32/32
+mem:  512   192    256    64   128/128
+mem: 1024   384    512   128   256/256
+mem: 2048   768   1024   256   512/512
+mem: 3072  1152   1536   384   768/768
+mem: 4096  1536   2048   512  1024/1024
+mem: 6144  2304   3072   768  1024/1536
+mem: 8192  3072   4096  1024  1024/2048
+mem:12288  4608   6144  1536  1024/3072
+mem:16384  6144   8192  2048  1024/4096
+mem:20480  7680  10240  2560  1024/5120
+mem:24576  9216  12288  3072  1024/6144
+```
+
+`threads` 列是 `usable/policy`：policy 是公式值，usable 是当前 32 位非 PAE
+端口能真正容纳的值（`NKTHREAD_MAX = 1024`）。以后上 PAE 或 x86_64，只需抬高
+`NKTHREAD_MAX`、把栈窗口扩大，公式不动。
+
+### 11.3 实现位置与关键改动
+
+| 内容 | 位置 |
+|---|---|
+| 纯策略函数 + 启动规划 + `memplan` 表 | `kernel/vm/mem_plan.{c,h}` |
+| 启动调用（在 `page_ref_init`/`kthread_init` 前） | `kernel/sys/glue.c: main()` |
+| 运行时 TCB 槽数 `nkthread` | `kernel/thread/kthread.{c,h}` |
+| 用户堆/mmap/栈布局 | `kernel/sys/usermode.c` |
+| 引导/测试 | `build_kernel.{ps1,sh}`、`tools/run_qemu_test.{ps1,sh}`、`tools/test_kthread.*` |
+
+具体：
+
+1. **TCB 池运行时定容**：`NKTHREAD` 常量改为 `NKTHREAD_MAX`（存储上限）+ 
+   `int nkthread`（运行时值）。`kthread_init()`、所有调度/遍历循环、TID 分配
+   全部改用 `nkthread`；TCB 池仍是一段连续数组，`me - kthreads` 语义不变。
+2. **内核栈 8KB → 16KB 固定**：`KSTACK_SIZE = 16384`，栈池窗口从
+   `0xFF000000` 下移到 `0xFC000000`（1024×16KB = 16MB，PDE `0x3f0..0x3f3`）。
+   用户页目录的共享 PDE 范围扩到 `0x3ec..0x3fd`。
+3. **用户栈 2MB 固定**：主线程 `USER_STACK_SIZE = 0x200000`；额外线程栈在
+   `0xB0000000 + slot*2MB` 的 32MB 窗口（16 槽，对应 `TID_STRIDE=16`），
+   首次访问由 `demand_page()` 分配零页。单进程线程数因此也以 16 为上限。
+4. **用户堆/mmap 动态**：`user_layout_init()` 按 `addressable_kb` 计算
+   `user_heap_max`、`mmap_base`、`mmap_limit`；`brk`/`mmap` 的边界检查改用
+   这三个运行时值。
+5. **4GB 物理内存**：`page_alloc()` 上界改用 `mem_phys_limit`（64 位计算，
+   防止 `physmem << 12` 在 4GB 回绕成 0）；COW 引用表从 1MB 扩到 2MB
+   （16 位 × 1M 页 = 4GB），进程表下移到 `0xFB000000` 让出空间。
+6. **地址空间边界修正**：用户地址空间上界是 `0xC0000000`（PDE `0x300`），
+   `free_address_space()`/`copy_address_space*()` 的循环从旧的 `0x3f6` 收到
+   `USER_PDE_LIMIT = 0x300`，否则会把 `0xFB000000` 的进程表和 `0xFC000000`
+   的栈池当用户页表释放/复制——S411 第一版就是在 `exit` 时踩到这个
+   （TRAP 12，`cr2=0xfb00011c`）。
+
+### 11.4 验证
+
+- **128MB（QEMU）**：`mem: plan total 128 MB: kheap 48, uheap 64, mmap 16`，
+  `32` 线程，`kthread: 32 thread slots at fc000000 (16 KB stacks)`；
+  `shell` → `echo hi` → `exit 0` 全通过。
+- **512MB（QEMU）**：`511→512MB` 取整后 `kheap 192, uheap 256, mmap 64`，
+  `128` 线程；shell 正常。
+- **4GB（VMware，`vms/BSD45-4GB.vmx`）**：VMware 实际只给 32 位非 PAE guest
+  3070MB（PCI 空洞），规划按 3072MB 正确输出 `1152/1536/384`、`768` 线程；
+  `memplan` 表显示 4096MB → `1536/2048/512`、`1024` 线程。
+- **回归**：`test_s3`、`test_s9`、`test_pthread` 在 128MB 下 PASSED；
+  `test_kthread` 的「16 槽」断言改为动态匹配 `thread slots at fc000000`.
+
+### 11.5 扩容到 6GB～24GB 的路径
+
+当前 `kernel/arch/i386` 是**非 PAE 32 位**，物理地址上限 4GB；QEMU/VMware
+的 32 位 guest 因 PCI 空洞实际只能看到约 3GB。因此：
+
+- **策略层已经支持到 24GB**（`memplan` 表可直接验证），不需要改公式。
+- 要让 6GB+ 真正可用，需要：PAE 分页（36 位物理地址）或 x86_64 端口；
+  同时把 `NKTHREAD_MAX` 从 1024 抬高，并把 16KB 内核栈窗口从 16MB 扩到
+  `NKTHREAD_MAX * 16KB`（PAE 下还要给 TCB 池/引用表换更大的内核 VA 窗口）。
+- 线程数仍按 `total/4MB`，4GB/8GB/16GB/24GB 分别对应 1024/2048/4096/6144；
+  每线程 2MB 用户栈 + 16KB 内核栈的预算不变。

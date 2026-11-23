@@ -30,6 +30,7 @@
 #include "sys/smp.h"
 #include "sys/kipc.h"
 #include "vm/zcomp.h"
+#include <vm/mem_plan.h>
 extern void cow_print(void);
 extern int install_to_disk(void);
 
@@ -382,9 +383,12 @@ monitor(void)
 			    "      zcomp  zcomptest\n"
 			    "      aio  aiotest\n"
 			    "      wtest\n"
+			    "      memplan            (128MB..24GB memory policy table)\n"
 			    "      install  disk      (ISO -> virtual disk install)\n");
 		else if (!strcmp(line, "mem"))
 			cmd_mem();
+		else if (!strcmp(line, "memplan"))
+			mem_plan_table();
 		else if (!strcmp(line, "vstat"))
 			cmd_vstat();
 		else if (!strcmp(line, "vstress"))

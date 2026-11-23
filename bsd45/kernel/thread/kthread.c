@@ -33,18 +33,19 @@ extern void bzero(void *, unsigned);
  * has to stay below 0x90000.  A window (backed by pages reserved from the
  * bump allocator) removes that constraint: capacity becomes a memory
  * question, and kthreads[i] / &kthreads[i] / (me - kthreads) keep working
- * exactly as before - it is still one contiguous array of NKTHREAD TCBs.
+ * exactly as before - it is still one contiguous array of nkthread TCBs.
  * TCB 池放在内核 VA 窗口而不是 .bss：引导器把镜像暂存在 0x10000、stage2 在
  * 0x90000 运行，因此 .bss 必须留在 0x90000 以下。窗口（物理页由 bump 分配器
  * 预留）解除这个限制，容量只受内存约束，下标语义不变——它仍是一段连续的
- * NKTHREAD 个 TCB。
+ * nkthread 个 TCB。
  *
- * S410: 1024 TCBs at 0xFEF00000, i.e. between the process table (0xFED00000
- * + 1.77 MB) and the stack window (0xFF000000).  The old 0xFE3C0000 slot was
- * sized for 256 TCBs inside the gap under CD_IMAGE_VA.
+ * S411: the pool is sized at boot from mem_plan.nthreads (32 at 128 MB,
+ * 1024 at 4 GB) and stays at 0xFEF00000.  S410 put it here, between the
+ * process table (now at 0xFB000000) and the 16 MB stack window at
+ * 0xFC000000; it is above CD_IMAGE_VA's 4 MB window and never collides
+ * with a user mapping.
  */
-#define	KTHREAD_TABLE_VA	0xFEF00000	/* after procs (0xFED00000+1.77MB),
-						 * below the stack window 0xFF000000 */
+#define	KTHREAD_TABLE_VA	0xFEF00000	/* TCB pool: nkthread * sizeof */
 struct kthread	*kthreads;
 
 extern void *kern_table_alloc(unsigned va, unsigned size);
@@ -56,7 +57,7 @@ kthread_table_init(void)
 	if (kthreads != 0)
 		return;
 	kthreads = (struct kthread *)kern_table_alloc((unsigned)KTHREAD_TABLE_VA,
-	    NKTHREAD * (unsigned)sizeof(struct kthread));
+	    (unsigned)nkthread * (unsigned)sizeof(struct kthread));
 }
 
 /*
@@ -78,7 +79,7 @@ kthread_table_init(void)
 void
 kthread_prime_stacks(void)
 {
-	unsigned va, end = (unsigned)KSTACK_VA + NKTHREAD * KSTACK_SIZE;
+	unsigned va, end = (unsigned)KSTACK_VA + (unsigned)nkthread * KSTACK_SIZE;
 
 	/*
 	 * kern_table_alloc() opens the 4 MB window for the address it is
@@ -159,14 +160,11 @@ kthread_trampoline(void)
 /*
  * Kernel stacks are per TCB slot and mapped exactly once.
  *
- * Each slot owns a fixed 8 KB window at KSTACK_VA + i*KSTACK_SIZE, so a slot
- * that is handed out again does not need new physical pages: the previous
- * thread's frames are simply wiped.  Before this, kstack_alloc() called
- * vfs_page_alloc() on *every* spawn and nothing ever returned those pages -
- * a fork/exit cycle leaked 8 KB each time (200 sequential forks = 1.6 MB,
- * and page tables/TCBs were recycled fine, so only the idle page counter
- * revealed it).  Caching bounds kernel-stack memory at NKTHREAD*8 KB = 2 MB
- * and makes churn allocation-free after the first pass.
+ * Every slot owns a fixed 16 KB window at KSTACK_VA + i*KSTACK_SIZE, so a
+ * slot that is handed out again does not need new physical pages: the
+ * previous thread's frames are simply wiped.  Caching bounds kernel-stack
+ * memory at nkthread*16 KB (512 KB at 128 MB, 16 MB at 4 GB) and makes
+ * churn allocation-free after the first pass.
  *
  * The pages are deliberately not unmapped on thread exit: a user thread
  * frees its own TCB while still running on that very stack (kthread_exit /
@@ -177,12 +175,13 @@ kthread_trampoline(void)
  * 8KB 窗口，重新分配时只要把上一个线程留下的栈帧清零，无需再取物理页。此前
  * 每次 spawn 都调 vfs_page_alloc() 且从不归还，一个 fork/exit 周期泄漏 8KB
  * （200 次顺序 fork = 1.6MB；页表与 TCB 都正常回收，只有空闲页计数能暴露）。
- * 缓存后内核栈上限固定为 NKTHREAD*8KB = 2MB，抖动期零分配。
+ * 缓存后内核栈上限固定为 nkthread*16KB（128MB 时 512KB，4GB 时 16MB），
+ * 抖动期零分配。
  * 故意不在线程退出时解除映射：用户线程释放自己的 TCB 时仍运行在该栈上
  * （kthread_exit / thread_exit_current），此时归还页面等于释放正在使用的内存。
  * 延迟回收最多只能拿回 2MB，不值得冒 use-after-free 的风险。
  */
-static unsigned char	kstack_mapped[NKTHREAD];
+static unsigned char	kstack_mapped[NKTHREAD_MAX];
 
 /*
  * Map (or reuse) the kernel stack for TCB slot i.  Returns 0, or -1 for a
@@ -196,7 +195,7 @@ kstack_alloc(int i)
 	unsigned pa;
 	int j;
 
-	if (i < 0 || i >= NKTHREAD)
+	if (i < 0 || i >= nkthread)
 		return (-1);
 	va = (unsigned char *)(KSTACK_VA + i * KSTACK_SIZE);
 	if (kstack_mapped[i]) {
@@ -223,18 +222,19 @@ kthread_init(void)
 
 	if (kthreads == 0)
 		kthread_table_init();
-	bzero(kthreads, NKTHREAD * sizeof(struct kthread));
+	bzero(kthreads, (unsigned)nkthread * sizeof(struct kthread));
 	bzero(kstack_mapped, sizeof(kstack_mapped));	/* no stack mapped yet */
 	curk = 0;
 	sched_esp = 0;
 	kthread_switches = 0;
 	rq_head = rq_tail = 0;
-	for (i = 0; i < NKTHREAD; i++) {
+	for (i = 0; i < nkthread; i++) {
 		kthreads[i].t_state = KT_FREE;
 		kthreads[i].t_proc = 0;
 		kthreads[i].t_used = 0;
 	}
-	printf("kthread: %d thread slots at %x\n", NKTHREAD, KSTACK_VA);
+	printf("kthread: %d thread slots at %x (%d KB stacks)\n", nkthread,
+	    KSTACK_VA, KSTACK_SIZE / 1024);
 }
 
 /* 中文：创建一个内核线程，分配槽位、设置入口和栈并初始化切换上下文 */
@@ -246,7 +246,7 @@ kthread_spawn(const char *name, void (*entry)(void *), void *arg)
 	unsigned *sp;
 	int i;
 
-	for (i = 0; i < NKTHREAD; i++)
+	for (i = 0; i < nkthread; i++)
 		if (!kthreads[i].t_used) {
 			t = &kthreads[i];
 			break;
@@ -291,7 +291,7 @@ kthread_user_spawn(struct proc *p, int tid)
 	struct kthread *t = 0;
 	int i;
 
-	for (i = 0; i < NKTHREAD; i++)
+	for (i = 0; i < nkthread; i++)
 		if (!kthreads[i].t_used) {
 			t = &kthreads[i];
 			break;
@@ -338,7 +338,7 @@ kthread_user_find(int tid)
 {
 	int i;
 
-	for (i = 0; i < NKTHREAD; i++)
+	for (i = 0; i < nkthread; i++)
 		if (kthreads[i].t_used && kthreads[i].t_proc != 0 &&
 		    kthreads[i].t_tid == tid)
 			return (&kthreads[i]);
@@ -469,7 +469,7 @@ kthread_print(void)
 	int i;
 
 	printf("kthread: switches %d\n", kthread_switches);
-	for (i = 0; i < NKTHREAD; i++) {
+	for (i = 0; i < nkthread; i++) {
 		struct kthread *t = &kthreads[i];
 
 		if (!t->t_used)
@@ -487,7 +487,7 @@ kthread_count(void)
 {
 	int i, n = 0;
 
-	for (i = 0; i < NKTHREAD; i++)
+	for (i = 0; i < nkthread; i++)
 		if (kthreads[i].t_used)
 			n++;
 	return (n);
@@ -755,7 +755,7 @@ kthread_find(int tid)
 {
 	int i;
 
-	for (i = 0; i < NKTHREAD; i++)
+	for (i = 0; i < nkthread; i++)
 		if (kthreads[i].t_used && kthreads[i].t_tid == tid)
 			return (&kthreads[i]);
 	return (0);

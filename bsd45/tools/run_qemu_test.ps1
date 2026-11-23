@@ -10,7 +10,8 @@ param(
     [int]$BootTimeoutSec = 25,
     [int]$SerialPort = 5555,
     [int]$MonitorPort = 4444,
-    [int]$SettleMs = 300
+    [int]$SettleMs = 300,
+    [int]$MemMB = 128
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,7 +28,7 @@ $log = Join-Path $ws "build\qemu-serial.log"
 Remove-Item $log -Force -ErrorAction SilentlyContinue
 
 $argList = @(
-    "-cdrom", "`"$Iso`"", "-boot", "d", "-m", "64",
+    "-cdrom", "`"$Iso`"", "-boot", "d", "-m", "$MemMB",
     "-display", "none", "-no-reboot",
     "-serial", "tcp:127.0.0.1:$SerialPort,server=on,wait=on",
     "-monitor", "tcp:127.0.0.1:$MonitorPort,server=on,nowait"
@@ -76,9 +77,14 @@ try {
     if (-not (Wait-Text "bsd45>" ($BootTimeoutSec * 1000))) { throw "boot timeout: no monitor prompt" }
     Start-Sleep -Milliseconds $SettleMs
     foreach ($k in $Keys) {
-        $bytes = [Text.Encoding]::ASCII.GetBytes($k + "`r")
-        $ns.Write($bytes, 0, $bytes.Length)
-        $ns.Flush()
+        try {
+            $bytes = [Text.Encoding]::ASCII.GetBytes($k + "`r")
+            $ns.Write($bytes, 0, $bytes.Length)
+            $ns.Flush()
+        } catch {
+            Write-Host "serial closed while sending: $k"
+            break
+        }
         Pump 200
         Start-Sleep -Milliseconds 500
     }
