@@ -339,3 +339,156 @@ klog_buf 全空                          # 一次 printf 都没发生
 排查建议：直接用 QEMU 的 `-serial file:` 做"能跑通"的对照，然后在
 `locore.s` / `glue.c` 的关键点插入 `klog_putc` 检查点，再拍 VMware 快照
 定位。
+
+---
+
+## 10. 2026-11-24 S412：VMware 跑内核 / 无窗口发按键 / 串口检查点
+
+这一节是这次 SMP 调试实际用的流程，不依赖 QEMU，也不需要在 VMware 窗口里
+手动敲键盘。
+
+### 10.1 准备一个带文件串口的 VMX
+
+关键配置（`bsd45/vms/BSD45-SMP.vmx` 可作模板）：
+
+```ini
+memsize = "2048"
+numvcpus = "4"
+cpuid.coresPerSocket = "2"        ; 想试超线程时加
+
+ide1:0.present = "TRUE"
+ide1:0.deviceType = "cdrom-image"
+ide1:0.fileName = "..\out\BSD45-ELF-x86.iso"
+ide1:0.startConnected = "TRUE"
+
+serial0.present = "TRUE"
+serial0.fileType = "file"
+serial0.fileName = "bsd45-smp-serial.log"
+
+keyboard.vusb.enable = "FALSE"    ; 内核只认 8042，不能给 USB 键盘
+mouse.vusb.enable = "FALSE"
+bios.bootOrder = "cdrom"
+```
+
+- 串口写成 **file** 最省事：内核的 printf 会原样落盘，VM 崩了日志还在。
+- `keyboard.vusb.enable = "FALSE"` 必须加，否则 guest 收不到按键。
+- 32 位非 PAE guest 给 4GB 也只能看到约 3GB（PCI 空洞），这是正常的。
+
+### 10.2 启停与看日志
+
+```powershell
+$vmrun = 'C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe'
+$vmx   = 'C:\Users\Administrator\Desktop\work\bsd45\vms\BSD45-SMP.vmx'
+
+# 启动（GUI 窗口，便于 SendKeys 聚焦）
+& $vmrun -T ws start $vmx
+Start-Sleep 12
+Get-Content 'bsd45-smp-serial.log' -Raw | Select-String 'bsd45>' -AllMatches
+
+# 停止（内核崩死/挂起时用 hard）
+& $vmrun -T ws stop $vmx hard
+```
+
+- 重新构建 ISO 前必须先 `vmrun stop`：ISO 还被 VMware 打开时，
+  `build_iso.ps1` 会报 `cannot append the kernel to the ISO: it is still
+  open in VMware`。
+- `vmrun -T ws list` 会列出**所有**正在跑的 VM（包括别的 Ubuntu），别误停。
+
+### 10.3 无窗口给 guest 发按键（Python + user32）
+
+PowerShell 的 `WScript.Shell`/`Add-Type` 在本机被安全策略拦截；用 Python
+的 `ctypes` 调 Win32 API 即可。核心步骤：找窗口 → 置前 → 点一下窗口中心
+让 VM 拿到焦点 → `keybd_event` 逐个字符 + 回车。
+
+```python
+import ctypes, time
+u = ctypes.windll.user32
+h = u.FindWindowW(None, 'BSD45-SMP 4vCPU - VMware Workstation')
+u.ShowWindow(h, 9); u.SetForegroundWindow(h); time.sleep(1.0)
+
+class R(ctypes.Structure):
+    _fields_ = [('l', ctypes.c_long), ('t', ctypes.c_long),
+                ('r', ctypes.c_long), ('b', ctypes.c_long)]
+r = R(); u.GetWindowRect(h, ctypes.byref(r))
+u.SetCursorPos((r.l + r.r)//2, (r.t + r.b)//2)
+u.mouse_event(2, 0, 0, 0, 0); u.mouse_event(4, 0, 0, 0, 0)  # 左键按下/抬起
+time.sleep(0.8)
+
+def send(s):
+    for ch in s:
+        vk = ord(ch.upper())
+        u.keybd_event(vk, 0, 0, 0); u.keybd_event(vk, 0, 2, 0)
+        time.sleep(0.06)
+    u.keybd_event(0x0D, 0, 0, 0); u.keybd_event(0x0D, 0, 2, 0)
+
+send('smpon'); time.sleep(8)
+send('smpinfo'); time.sleep(2)
+```
+
+注意：
+
+- 这条路径只能打字母数字；`-`、`/` 等符号的 VK 码不同，会被吞掉或变成
+  别的键（本次 `vmware-ok` 打成了 `vmwareok`）。要打符号就单独映射 VK。
+- 窗口标题必须完全匹配（`FindWindowW(None, title)`）；窗口没置前时按键会
+  落到主机其它程序。
+- 如果第一次没反应，重复一次置前 + 点击；VMware 有时要第二次才把焦点给
+  guest。
+
+### 10.4 从崩溃行定位到源码
+
+串口会给出类似：
+
+```
+*** kernel TRAP 12 (stack fault) err=2
+eip=fe115eb2 cs=8 eflags=10046 esp=fe109f6e ss=0
+eax=0 ebx=5 ecx=fa edx=318 esi=1b3000 edi=1b3000
+cr2=7000
+```
+
+用 MSYS2 的 binutils 直接查：
+
+```bash
+cd bsd45
+/c/msys64/mingw32/bin/addr2line.exe -f -e build/bsd45.elf 0xfe115eb2
+/c/msys64/mingw32/bin/objdump.exe -d \
+    --start-address=0xfe115e80 --stop-address=0xfe115ed0 build/bsd45.elf
+```
+
+- `cr2` 是缺页地址，`err` 的 bit0=保护/不存在、bit1=写、bit2=用户。
+  本次 `cr2=7000 err=2` 就是“写 0x7000 时页不存在/不可写”。
+- `ss=0`/`esp` 落在 .bss 说明栈已经坏了，不一定是缺页本身导致的。
+
+### 10.5 串口检查点（比单步更快）
+
+在怀疑的路径上直接写 COM1，不依赖 printf/控制台锁：
+
+```c
+hal_outb(0x3f8, 'A');    /* BSP C 代码 */
+```
+
+汇编里：
+
+```asm
+movw $0x3f8, %dx
+movb $0x52, %al
+outb %al, %dx
+```
+
+本次 AP 启动就是靠 `I1RGPDC3C2W` 这串字符定位的：
+
+- `I` INIT 已发、`1` 第一次 SIPI、`R` AP 进 trampoline、`G` 加载临时 GDT、
+  `P` 进保护模式、`D` 32 位段、`C` CR3、`3` 开分页、`S/L/T/P` AP C 入口；
+- 缺哪个字符，问题就在它前一步。定位后记得把这些 `outb` 删掉，否则会和
+  正常输出混在一起。
+
+### 10.6 本次踩到的 VMware 相关坑
+
+1. **ISO 被占用**：VM 还开着时 `build_iso.ps1` 无法写 ISO，先 `vmrun stop`。
+2. **VMX 被 VMware 改写**：关机后 `cleanShutdown` 会自动从 FALSE 变 TRUE，
+   git 里会出现无意义 diff，提交前 `git checkout -- <vmx>`。
+3. **4GB 只看到 3GB**：32 位非 PAE + PCI 空洞，属正常；用 `memplan` 表
+   验证 4GB 策略，不要拿 guest 实际可用内存当 4GB。
+4. **多 vCPU 上限**：VMware 对 32 位 guest 可能只暴露 2 个逻辑 CPU（本次
+   `numvcpus=4` 仍报 logical 2）；以 CPUID 结果为准，不要相信 VMX 配置。
+5. **AP 不能直接 printf**：控制台没有跨核锁，AP 的字符会和 BSP 输出交错；
+   AP 上线只由 BSP 打一行汇总，AP 内部用 `outb 0x3f8` 检查点即可。

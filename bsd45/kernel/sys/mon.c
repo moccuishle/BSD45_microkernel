@@ -377,7 +377,7 @@ monitor(void)
 			printf("help  mem  vstat  vstress  pte <addr>  map  banner  "
 			    "usermode  shell  test  cd  reboot  halt\n"
 			    			    "      kthread  softirq  kthreadtest  softirqtest\n"
-			    "      schedtest  synctest  smpinfo  ipitest\n"
+			    "      schedtest  synctest  smpinfo  cpuinfo  smpping  ipitest\n"
 			    "      ipctest  ipcinfo\n"
 			    "      clock  lat  cow\n"
 			    "      zcomp  zcomptest\n"
@@ -407,6 +407,12 @@ monitor(void)
 		}
 		else if (!strcmp(line, "smpinfo"))
 			smp_print();
+		else if (!strcmp(line, "cpuinfo"))
+			cpuinfo_print();
+		else if (!strcmp(line, "smpping")) {
+			smp_reschedule();
+			printf("smpping: IPI sent to active APs\n");
+		}
 		else if (!strcmp(line, "smpon")) {
 			int n = smp_enable();
 

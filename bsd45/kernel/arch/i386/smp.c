@@ -16,20 +16,218 @@
 extern void pmap_map(unsigned virt, unsigned start, unsigned end, int prot);
 #define	VM_PROT_READ	0x1
 #define	VM_PROT_WRITE	0x2
-#define	LAPIC_VA	0xFE800000u	/* free kernel window above URING at 0xFE7xxxxx */
+#define	LAPIC_VA	0xFEA00000u	/* free 4KB window: FE8 buf, FE9 pagecache */
 
-/* EN: Read a CMOS/RTC register (port 0x70 index, 0x71 data). */
-static unsigned char
-cmos_read(int reg)
-{
-
-	hal_outb(0x70, (unsigned)(reg & 0x7f));
-	return (hal_inb(0x71));
-}
+/* EN: CPUID helper is used for topology; CMOS guesses were removed (S412). */
 
 struct cpu_info cpus[MAXCPU];
 int ncpu = 1;			/* BSP is CPU 0; grows as APs come up */
 static int ap_tramp_installed = 0;	/* set once trampoline is copied+patched */
+
+/* S412: IPI gates.  setidt() lives in machdep.c (K&R definition). */
+extern void setidt(int idx, void *func, int typ, int dpl);
+extern void smp_ipi_tlb(void), smp_ipi_resched(void), smp_ipi_stop(void);
+static int smp_idt_done;
+
+static void
+smp_idt_init(void)
+{
+
+	if (smp_idt_done)
+		return;
+	setidt(IPI_TLB_SHOOTDOWN, (void *)smp_ipi_tlb, 14, 0);
+	setidt(IPI_RESCHEDULE, (void *)smp_ipi_resched, 14, 0);
+	setidt(IPI_STOP, (void *)smp_ipi_stop, 14, 0);
+	smp_idt_done = 1;
+}
+
+/*
+ * S412: AP stacks and the embedded raw trampoline.  The trampoline is
+ * linked at physical 0x7000 (not at KERNBASE+...), because an AP starts in
+ * real mode where absolute addresses are physical.  build_kernel.ps1 emits
+ * ap_tramp_bin[]; the data block lives at offset 0x300 in that blob.
+ */
+#define	AP_TRAMP_DATA_OFF	0x300
+#define	AP_TRAMP_GDTR		0x300	/* limit16 + base32 */
+#define	AP_TRAMP_PD		0x306
+#define	AP_TRAMP_STACK		0x30a
+#define	AP_TRAMP_CPUID		0x30e
+#define	AP_TRAMP_ENTRY		0x312
+#define	AP_TRAMP_WIN		0xFEB00000u	/* writable alias of phys 0x7000 */
+
+extern const unsigned char ap_tramp_bin[];
+extern const unsigned int ap_tramp_bin_len;
+extern int IdlePTD;
+
+/* 8 CPUs x 16 KB, in .bss (VA is valid in every page directory). */
+static unsigned char ap_stacks[MAXCPU][16384] __attribute__((aligned(16)));
+
+extern unsigned vfs_page_alloc(void);
+
+/* Kernel GDT/IDT pseudo-descriptors, loaded by every AP after paging. */
+struct gdtr_pack {
+	unsigned short	limit;
+	unsigned	base;
+} __attribute__((packed));
+extern struct gdtr_pack r_gdt, r_idt;
+extern void lgdt(void *), lidt(void *);
+
+/*
+ * S412: AP page directory.
+ *
+ * IdlePTD's low identity map is not usable here: its PTEs are read-only and
+ * pmap_pte() cannot reach them, so an AP that enables paging at 0x7000
+ * triple-faults.  Build a private AP page directory with a writable
+ * 0..4 MB identity map plus copies of the kernel windows, and point the
+ * trampoline at it.  All APs share it (they run kernel code only).
+ */
+#define	AP_PD_WIN	0xFEB01000u
+#define	AP_PT_WIN	0xFEB02000u
+static unsigned ap_pd_pa;
+
+static void
+ap_pd_setup(void)
+{
+	unsigned *kpd = (unsigned *)((unsigned)KERNBASE + (unsigned)IdlePTD);
+	unsigned *pd, *pt, pt_pa;
+	int i;
+
+	ap_pd_pa = vfs_page_alloc();
+	pt_pa = vfs_page_alloc();
+	pmap_map(AP_PD_WIN, ap_pd_pa, ap_pd_pa + 0x1000,
+	    VM_PROT_READ | VM_PROT_WRITE);
+	pmap_map(AP_PT_WIN, pt_pa, pt_pa + 0x1000,
+	    VM_PROT_READ | VM_PROT_WRITE);
+	pd = (unsigned *)AP_PD_WIN;
+	pt = (unsigned *)AP_PT_WIN;
+	for (i = 0; i < 1024; i++) {
+		pd[i] = 0;
+		pt[i] = ((unsigned)i << 12) | 0x003;	/* V|RW, supervisor */
+	}
+	pd[0] = pt_pa | 0x003;
+	/* Kernel windows: proc table, stacks, image, CD, caches, tables. */
+	for (i = 0x3ec; i < 1024; i++)
+		pd[i] = kpd[i];
+	/* Its own recursive PTmap (PDRPDROFF = 0x3f7), not IdlePTD's. */
+	pd[0x3f7] = ap_pd_pa | 0x003;
+	printf("smp: AP page dir %x (low PT %x), tramp win %x\n",
+	    ap_pd_pa, pt_pa, AP_TRAMP_WIN);
+}
+
+
+/* S412: topology from CPUID, never from CMOS guesses. */
+int	cpu_logical = 1;
+int	cpu_cores = 1;
+int	cpu_smt = 1;
+int	cpu_htt = 0;
+char	cpu_vendor[13];
+
+/*
+ * Execute CPUID with an explicit subleaf.  EBX is a fixed register on i386,
+ * so it must be listed as an output; the kernel is built -fno-pic, which
+ * makes that legal.
+ */
+static void
+cpuid(unsigned leaf, unsigned sub, unsigned *a, unsigned *b, unsigned *c,
+    unsigned *d)
+{
+
+	__asm __volatile("cpuid"
+	    : "=a" (*a), "=b" (*b), "=c" (*c), "=d" (*d)
+	    : "a" (leaf), "c" (sub));
+}
+
+/*
+ * S412: CPUID topology.
+ *
+ * Leaf 1 gives the logical processor count (EBX[23:16]) and the HTT feature
+ * bit (EDX[28]).  Leaf 0xB (or 0x1F on newer parts) describes the topology
+ * levels: subleaf 0 is the SMT level (type 1), subleaf 1 the core level
+ * (type 2), and EBX[15:0] is the number of logical processors at that level.
+ * If leaf 0xB is absent we fall back to leaf 4's "cores-1" field.
+ */
+int
+cpu_topology_detect(void)
+{
+	unsigned maxleaf, a, b, c, d, smt, logical, cores;
+
+	cpuid(0, 0, &maxleaf, &b, &c, &d);
+	cpu_vendor[0] = (char)(b & 0xff);
+	cpu_vendor[1] = (char)((b >> 8) & 0xff);
+	cpu_vendor[2] = (char)((b >> 16) & 0xff);
+	cpu_vendor[3] = (char)((b >> 24) & 0xff);
+	cpu_vendor[4] = (char)(d & 0xff);
+	cpu_vendor[5] = (char)((d >> 8) & 0xff);
+	cpu_vendor[6] = (char)((d >> 16) & 0xff);
+	cpu_vendor[7] = (char)((d >> 24) & 0xff);
+	cpu_vendor[8] = (char)(c & 0xff);
+	cpu_vendor[9] = (char)((c >> 8) & 0xff);
+	cpu_vendor[10] = (char)((c >> 16) & 0xff);
+	cpu_vendor[11] = (char)((c >> 24) & 0xff);
+	cpu_vendor[12] = 0;
+
+	cpuid(1, 0, &a, &b, &c, &d);
+	cpu_htt = (int)((d >> 28) & 1);
+	logical = (b >> 16) & 0xff;
+	if (logical == 0)
+		logical = 1;
+
+	smt = 1;
+	cores = logical;
+	if (maxleaf >= 0x0b) {
+		unsigned a0, b0, c0, d0, a1, b1, c1, d1;
+
+		cpuid(0x0b, 0, &a0, &b0, &c0, &d0);
+		cpuid(0x0b, 1, &a1, &b1, &c1, &d1);
+		if (((c0 >> 8) & 0xff) == 1 && (b0 & 0xffff) != 0) {
+			smt = b0 & 0xffff;
+			if (((c1 >> 8) & 0xff) == 2 && (b1 & 0xffff) != 0)
+				logical = b1 & 0xffff;
+			cores = (smt != 0) ? logical / smt : logical;
+		}
+	} else if (maxleaf >= 4) {
+		/* No topology leaf: leaf 4 EAX[31:26] = cores - 1. */
+		cpuid(4, 0, &a, &b, &c, &d);
+		cores = ((a >> 26) & 0x3f) + 1;
+		if (cores > logical)
+			cores = logical;
+	}
+
+	if (cores < 1)
+		cores = 1;
+	if (logical < cores)
+		logical = cores;
+	smt = logical / cores;
+	if (smt < 1)
+		smt = 1;
+	cpu_logical = (int)logical;
+	cpu_cores = (int)cores;
+	cpu_smt = (int)smt;
+	return (cpu_logical);
+}
+
+void
+cpuinfo_print(void)
+{
+	unsigned a, b, c, d, family, model, step;
+
+	cpu_topology_detect();
+	cpuid(1, 0, &a, &b, &c, &d);
+	step = a & 0xf;
+	model = (a >> 4) & 0xf;
+	family = (a >> 8) & 0xf;
+	if (family == 0xf)
+		family += (a >> 20) & 0xff;
+	if (family == 0x6 || family == 0xf)
+		model += ((a >> 16) & 0xf) << 4;
+	printf("cpu: vendor %s family %d model %d step %d\n",
+	    cpu_vendor[0] ? cpu_vendor : "unknown", (int)family, (int)model,
+	    (int)step);
+	printf("cpu: logical %d, cores %d, smt %d, htt %d\n",
+	    cpu_logical, cpu_cores, cpu_smt, cpu_htt);
+	printf("cpu: apic id %d, maxcpu %d\n", (int)lapic_id(), MAXCPU);
+}
+
 
 /*
  * S200: SMP master switch.  The kernel is validated as single-CPU by 17 test
@@ -136,7 +334,9 @@ lapic_send_ipi(int target, int vector)
 {
 
 	lapic_write(LAPIC_ICR_HI, (unsigned)(target << 24));
-	lapic_write(LAPIC_ICR_LO, (unsigned)(vector | 0x500));
+	/* Fixed delivery, edge triggered: the low byte is just the vector.
+	 * 0x500 is delivery mode 5 (INIT), which would reset the target. */
+	lapic_write(LAPIC_ICR_LO, (unsigned)vector);
 }
 
 /* EN: Signal end-of-interrupt to the local APIC. */
@@ -245,6 +445,7 @@ smp_init(void)
 		return;
 	}
 	lapic_map();
+	smp_idt_init();
 	detected = mp_detect();
 	printf("smp: per-CPU ready, %d CPU(s) detected, lapic %s\n",
 	    detected, lapic_va ? "mapped" : "absent");
@@ -253,31 +454,66 @@ smp_init(void)
 }
 
 /*
+ * Copy the raw AP trampoline to 0x7000 and patch the fields that are common
+ * to every AP: GDT physical base, kernel page directory, and ap_start().
+ * Per-AP stack/cpu-id are patched immediately before each SIPI.
+ */
+static void
+ap_tramp_install(void)
+{
+	unsigned char *p;
+	unsigned i, n = ap_tramp_bin_len;
+
+	/*
+	 * The low identity map is read-only and pmap_pte() does not resolve
+	 * user-range VAs, so write the blob through a high kernel window that
+	 * pmap_map() maps to physical 0x7000.  The AP still executes at low
+	 * 0x7000: reading/executing the read-only PTE is fine.
+	 */
+	pmap_map((unsigned)AP_TRAMP_WIN, (unsigned)CPU_TRAMPOLINE_PA,
+	    (unsigned)(CPU_TRAMPOLINE_PA + 0x1000),
+	    VM_PROT_READ | VM_PROT_WRITE);
+	p = (unsigned char *)AP_TRAMP_WIN;
+
+	if (n > 0x1000)
+		n = 0x1000;
+	for (i = 0; i < n; i++)
+		p[i] = ap_tramp_bin[i];
+	ap_pd_setup();
+	*(unsigned *)(p + AP_TRAMP_PD) = ap_pd_pa;
+	*(unsigned *)(p + AP_TRAMP_ENTRY) = (unsigned)ap_start;
+	ap_tramp_installed = 1;
+	printf("smp: AP trampoline %d bytes at %x, pd %x\n", (int)n,
+	    CPU_TRAMPOLINE_PA, ap_pd_pa);
+}
+
+/*
  * EN: Boot application processors 1..count-1 via the MP protocol.  The AP
- * trampoline is copied to low physical memory by the caller (stage2/boot);
- * if it is not present we log and leave the APs parked (single-CPU safe).
+ * trampoline is a raw 0x7000 blob embedded in the kernel image.
  */
 void
 smp_start_aps(int count)
 {
-	int ap;
+	int ap, i;
 
 	if (lapic_va == 0 || count <= 1)
 		return;
-	/* The AP trampoline must be installed at 0x7000 and its C entry
-	 * patched before SIPI.  Until that copy is wired in, do not release
-	 * the APs (they would jump into unmapped memory). */
+	if (!ap_tramp_installed)
+		ap_tramp_install();
 	if (!ap_tramp_installed)
 		return;
 	printf("smp: starting %d AP(s) via INIT/SIPI\n", count - 1);
 	for (ap = 1; ap < count && ap < MAXCPU; ap++) {
+		/* per-AP stack and cpu id, then INIT-SIPI-SIPI */
+		*(unsigned *)(AP_TRAMP_WIN + AP_TRAMP_STACK) =
+		    (unsigned)(ap_stacks[ap] + sizeof(ap_stacks[ap]));
+		*(unsigned *)(AP_TRAMP_WIN + AP_TRAMP_CPUID) = (unsigned)ap;
 		ap_send_init(ap);
 		ap_send_sipi(ap);
 		ap_send_sipi(ap);
-		ap_delay();
-		if (cpus[ap].ci_active)
-			printf("smp: AP %d online\n", ap);
-		else
+		for (i = 0; i < 20 && !cpus[ap].ci_active; i++)
+			ap_delay();
+		if (!cpus[ap].ci_active)
 			printf("smp: AP %d did not respond\n", ap);
 	}
 }
@@ -332,32 +568,32 @@ mp_scan_floating(void)
 }
 
 /*
- * EN: Detect the number of CPUs.  Requires a usable Local APIC, then uses
- * the SMBIOS/CMOS 0x5F processor count, cross-checked against the presence
- * of an MP floating table.  Falls back to 1 (BSP only).  Conservative: a
- * wrong count only costs an AP-start timeout, never corrupts the boot path.
+ * EN: Detect the number of schedulable logical CPUs from CPUID.  Returns the
+ * count clamped to MAXCPU; cpus[i].ci_apicid is filled with the expected APIC
+ * ID for now (QEMU/VMware number them 0..n-1; ACPI MADT parsing can replace
+ * this later without touching the scheduler).
  */
 int
 mp_detect(void)
 {
-	unsigned ver;
-	int mp = 0;
+	int mp, n, i;
 
 	if (lapic_va == 0)
 		return (1);		/* no Local APIC: single CPU */
-	ver = lapic_read(LAPIC_VER);
-	if ((ver & 0xff) == 0)
+	if ((lapic_read(LAPIC_VER) & 0xff) == 0)
 		return (1);		/* version 0: APIC not usable */
 	mp = mp_scan_floating();
-	{
-		unsigned char cpu_count = cmos_read(0x5f);
-
-		printf("smp: MP table %s, CMOS cpu_count=%u\n",
-		    mp ? "found" : "absent", (unsigned)cpu_count);
-		if (cpu_count >= 2 && cpu_count <= MAXCPU)
-			return ((int)cpu_count);
+	n = cpu_topology_detect();
+	printf("smp: MP table %s, CPUID logical %d cores %d smt %d htt %d\n",
+	    mp ? "found" : "absent", cpu_logical, cpu_cores, cpu_smt, cpu_htt);
+	if (n > MAXCPU) {
+		printf("smp: logical %d > MAXCPU %d, using first %d\n", n, MAXCPU,
+		    MAXCPU);
+		n = MAXCPU;
 	}
-	return (1);
+	for (i = 0; i < n; i++)
+		cpus[i].ci_apicid = (unsigned)i;
+	return (n > 1 ? n : 1);
 }
 
 /*
@@ -374,10 +610,24 @@ ap_start(int id)
 	cpus[id].ci_active = 1;
 	cpus[id].ci_curthread = 0;
 	cpus[id].ci_lapic = lapic_va;
+	/*
+	 * The trampoline used a temporary GDT and the AP still has the
+	 * real-mode IDTR, so load the kernel's GDT (for future TSS/ring3)
+	 * and IDT (for timer/IPI vectors) before touching the APIC.
+	 */
+	lgdt(&r_gdt);
+	lidt(&r_idt);
 	lapic_init();
 	lapic_timer_init();
 	ncpu++;
-	printf("smp: AP %d online (ncpu %d)\n", id, ncpu);
+	/*
+	 * Do not printf() from an AP: the console has no cross-CPU lock and
+	 * interleaved characters corrupt the BSP's monitor output.  The BSP's
+	 * "smpon: N CPU(s) online" is the single summary line.
+	 * 不从 AP 直接 printf：控制台没有跨核锁，字符会与 BSP 输出交错。
+	 */
+	__asm __volatile("sti");
+	__asm __volatile("sti");
 	for (;;) {
 		/* AP idle: drain its run queue, then halt until IPI */
 		__asm __volatile("hlt");
@@ -392,7 +642,8 @@ lapic_init(void)
 	if (lapic_va == 0)
 		return;
 	lapic_write(LAPIC_DFR, 0xffffffff);	/* flat model */
-	lapic_write(LAPIC_LDR, 1u << (lapic_id() & 0xff) << 24);
+	/* Flat logical destination: one bit per logical APIC ID in LDR[31:24]. */
+	lapic_write(LAPIC_LDR, 1u << (24 + (lapic_id() & 0x7)));
 	lapic_write(LAPIC_LVT_TIMER, 0x10000);	/* masked for now */
 	lapic_write(LAPIC_SPIV, 0x100 | 0x3f);	/* enable + spurious vec 0x3f */
 }
@@ -477,6 +728,10 @@ void
 smp_handle_ipi(int vector)
 {
 	unsigned cr3;
+	int me = (int)lapic_id();
+
+	if (me >= 0 && me < MAXCPU)
+		cpus[me].ci_ticks++;
 
 	switch (vector) {
 	case IPI_TLB_SHOOTDOWN:
@@ -510,6 +765,7 @@ smp_enable(void)
 		return (ncpu);
 	smp_enabled = 1;
 	lapic_map();
+	smp_idt_init();
 	detected = mp_detect();
 	printf("smp: enabling, %d CPU(s) detected, lapic %s\n",
 	    detected, lapic_va ? "mapped" : "absent");
@@ -533,6 +789,10 @@ smp_print(void)
 	    smp_enabled, active, ncpu, lapic_va ? "mapped" : "absent");
 	printf("smp: ipi_tlb=%u ipi_resched=%u tlb_flushes=%u\n",
 	    ipi_tlb_shootdowns, ipi_reschedules, smp_tlb_flushes);
+	for (i = 0; i < MAXCPU; i++)
+		if (cpus[i].ci_active)
+			printf("smp: cpu%d apic %d active ticks %u\n", i,
+			    (int)cpus[i].ci_apicid, cpus[i].ci_ticks);
 }
 
 /*

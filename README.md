@@ -27,6 +27,7 @@
 | ISO→虚拟磁盘安装指南 | [`bsd45/vms/README-INSTALL.md`](bsd45/vms/README-INSTALL.md) |
 | 缓存 / mmap / 地址空间设计 | [`docs/cache-mmap.md`](docs/cache-mmap.md)、[`os_vm.md`](os_vm.md) |
 | 调度 / 优先级实现 | [`docs/kernel-preemption.md`](docs/kernel-preemption.md)、[`os_sched.md`](os_sched.md) |
+| SMP / 多核适配（CPUID 拓扑、AP 启动、IPI） | [`os_smp.md`](os_smp.md) |
 | 文件系统实现清单（ISO9660/FFS/JLFS/tmpfs） | [`os_fs.md`](os_fs.md) |
 | 进程与线程实现（proc/TCB、fork/exec、KLT） | [`os_thread-process.md`](os_thread-process.md) |
 | 设计与路线（历史规划） | [`docs/object-kernel.md`](docs/object-kernel.md)、[`os.md`](os.md) |
@@ -83,13 +84,16 @@
 - `arch/i386/io.h` + `x86.asm`：端口 I/O 与 CPU 控制（原 `hal.h` 内容）。
 - `arch/i386/ctx.c`：上下文切换钩子（TSS esp0、`kswitch`、地址空间、系统调用门）。
 
-### SMP（基础设施，未启用多核）
+### SMP（S412：拓扑识别 + AP 上线 + IPI）
 
-- `kernel/include/sys/smp.h`、`kernel/arch/i386/smp.c`：per-CPU 结构、自旋锁、
-  Local APIC 读写、INIT/SIPI 协议、`smp_balance()` 框架。
-- `kernel/arch/i386/ap_tramp.s`：AP 启动 trampoline 源码（**未加入构建**）。
-- 当前状态：Local APIC 未映射，`mp_detect()` 返回 1，**系统单核运行**；
-  AP 启动需先解决 pmap 低端双映射（见下节待办）。
+- `kernel/include/sys/smp.h`、`kernel/arch/i386/smp.c`：CPUID 动态拓扑
+  （逻辑 CPU / 物理核 / SMT / HTT）、per-CPU 结构、自旋锁、Local APIC、
+  INIT-SIPI-SIPI、IPI/TLB shootdown 统计。
+- `kernel/arch/i386/ap_tramp.s`：独立链接在物理 0x7000 的实模式 trampoline，
+  自带页内临时 GDT；`kernel/arch/i386/smp_ipi.s`：IPI 中断 stub。
+- 当前状态：`smpon` 可把 AP 拉起（VMware 实测 2 CPU online），IPI 能在 AP
+  上执行；**用户进程/线程的跨核调度尚未接管**，BSP 仍是唯一调度器。
+  下一阶段设计见 [`os_smp.md`](os_smp.md) 第 6 节。
 
 ### 用户态 / 工具链 / 安装
 

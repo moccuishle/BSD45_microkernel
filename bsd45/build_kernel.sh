@@ -216,6 +216,7 @@ sources=(
     "c:$src/thread/softirq.c"
     "asm:$src/arch/$ARCH/kswitch.s"
     "asm:$src/arch/$ARCH/x86.asm"
+    "asm:$src/arch/$ARCH/smp_ipi.s"
     "asm:$src/arch/$ARCH/ap_tramp.s"
     # kernel/hal removed: context + timer folded into arch/i386, no IPL layer
     "c:$src/arch/$ARCH/smp.c"

@@ -13,13 +13,14 @@
 #ifndef _SMP_H_
 #define _SMP_H_
 
-#define	MAXCPU		4
+#define	MAXCPU		8
 #define	CPU_TRAMPOLINE_PA	0x7000	/* low phys page for AP trampoline */
 
 #ifndef ASSEMBLER
 struct cpu_info {
 	int		ci_id;		/* 0 = BSP */
 	int		ci_active;	/* AP finished basic init */
+	unsigned	ci_apicid;	/* hardware local APIC ID */
 	unsigned	ci_lapic;	/* local APIC MMIO base (VA) */
 	unsigned	ci_idle_tss;	/* per-CPU TSS selector */
 	void		*ci_curthread;	/* currently running TCB on this CPU */
@@ -28,6 +29,17 @@ struct cpu_info {
 
 extern struct cpu_info cpus[MAXCPU];
 extern int ncpu;			/* number of active CPUs */
+
+/*
+ * S412: topology discovered from CPUID (not CMOS guesses).
+ *   logical  = schedulable logical processors (includes SMT siblings)
+ *   cores    = physical cores
+ *   smt      = logical / cores
+ */
+extern int cpu_logical, cpu_cores, cpu_smt, cpu_htt;
+extern char cpu_vendor[13];
+int	cpu_topology_detect(void);
+void	cpuinfo_print(void);
 
 /* boot / AP startup */
 void	smp_init(void);		/* called by BSP after pmap+GDT ready */
