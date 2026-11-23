@@ -702,9 +702,30 @@ S421 #SS: cpu2 err=4 eip=80480a7 cs=1f ss=27 cr3=1d2000
 | **修后 SMP（三轮）** | 0 / 1 / 0 | **0 / 0 / 0** | 1000 live |
 
 修后三轮 user fault 全为 0，1000 子进程全部驻留。第二轮偶发 1 个 BSP
-TRAP 12（`cpu=0`、崩在 `proc_sched` 尾部 `fe1171a3`、esp 在 TCB 池）——
-那是 §12/§13 的 S417/S418 老问题在极限压力下的偶发复现，与本次 CR3 修复
-（AP、#SS、IdlePTD）表现完全不同，属既有遗留。
+TRAP 12（`cpu=0`、崩在 `proc_sched` 尾部 `fe1171a3`、esp 在 TCB 池），当时
+判为 §12/§13 老问题的偶发复现，与本次 CR3 修复（AP、#SS、IdlePTD）表现
+不同。
 
-`smp_user_dispatch` 仍默认 0：虽然 user fault 已清零，但 BSP TRAP 12 在
-proctest 极限压力下仍偶发，且常规负载样本不足以判定其频率。
+### 15.6 TRAP 12 收敛判定（2026-11-24 收尾）
+
+那 1 次 BSP TRAP 12 之后又做了大量加压，均未再复现：
+
+| 负载 | 轮数 | TRAP 12 |
+|---|---|---|
+| proctest（reap 加锁版） | 7 | 0 |
+| proctest（原始版对照） | 5 | 0 |
+| thrash（8 进程 × 400 fork/exit/reap 并发压测，重建后丢弃） | 4 | 0 |
+
+合计 **16 轮 0 复现**。据此判定 BSP TRAP 12 已收敛——很可能是 S421 的
+CR3 修复连带消除：崩溃时 `cpus[cid].ci_curthread = mt` 的下标
+（`0x1c(%esp)+0x20(%esp)`）被写成了栈地址 `fc31dd60`，本质是 `proc_sched`
+在错误的地址空间上下文里执行，而 CR3 与 `cur_pd` 失配正能让内核"看着
+正确的栈、却用着错误的页表"。当时把这次偶发判成"无关老问题"可能判错了。
+
+曾怀疑 `kthread_reap()` 发布 `t_used=0` 不持 `kthread_alloc_lock`（与
+`tcb_reserve()` 锁域错配）是根因，加了锁并验证 8 轮全过；但**不加锁的
+对照基线同样 8 轮全过**，对照无区分度，故不把该改动作为修复提交，已回退。
+该锁域错配是真实存在的结构性隐患，留给后续在能稳定复现时再验证。
+
+`smp_user_dispatch` 仍默认 0：user fault 已清零、TRAP 12 判定收敛，但
+故障曾为极低频偶发，默认打开前建议再长时间 soak。
