@@ -37,6 +37,7 @@
 #include "vfs.h"
 #include "sys/platform.h"
 #include "thread/kthread.h"
+#include "sys/smp.h"		/* S413: cpu_id(), per-CPU TSS, BKL */
 #include "sys/kipc.h"		/* S300: IPC / shared-page syscalls */
 #include "sys/srvproto.h"	/* KVFS: kernel-side fs_server protocol */
 /* context-switch hooks are declared in sys/platform.h */
@@ -259,6 +260,14 @@ static int	ps_snap_len;
 #define	P_BLOCKED	2
 #define	P_ZOMBIE	3
 #define	P_STOPPED	4
+/*
+ * S413: a slot claimed by proc_alloc() but not yet published by its caller.
+ * It must not look free to a second allocator on another CPU, and it has no
+ * TCB yet, so no scheduler scan can reach it.
+ * S413：被 proc_alloc() 预留、但调用者还没发布出去的槽位。它在另一个核看来
+ * 不能是空闲的；此时它还没有 TCB，所以任何调度扫描都碰不到它。
+ */
+#define	P_ALLOC		5
 
 /*
  * Signal numbers / defaults.  These are the 4.5BSD values; only the ones we
@@ -324,8 +333,42 @@ static int	ps_snap_len;
  */
 #define	PROC_TABLE_VA	0xFB000000
 static struct proc	*procs;
-static struct proc	*cur;		/* current process (kernel object) */
-static struct kthread	*cur_thread;	/* current execution flow */
+/* S413: serialises slot allocation in the shared process table. */
+static struct spinlock	proc_table_lock;
+
+/*
+ * S413: the scheduler used to keep "who is running" in four globals.  That
+ * cannot survive SMP: each CPU is simultaneously running a different thread
+ * from a different address space.  All of it now lives in one struct per
+ * CPU, indexed by cpu_id() (decoded from that CPU's TSS selector), so the
+ * code below still reads `cur`, `cur_thread`, `cur_pd` and `need_resched`
+ * but each CPU sees its own copy.
+ *
+ * sc_idle is the carrier an AP runs the scheduler loop on; it is not in the
+ * TCB pool, so no other CPU can ever pick it.
+ * S413：调度器原来用四个全局变量记录"谁在跑"，这在 SMP 下不成立——每个核同时
+ * 跑的是不同线程、不同地址空间。现在这些状态按 CPU 分开放，用 cpu_id() 索引；
+ * 下面代码仍然写 cur / cur_thread / cur_pd / need_resched，但每个核看到的是
+ * 自己那份。sc_idle 是 AP 跑调度循环用的载体，不在 TCB 池里，别的核选不中。
+ */
+struct sched_cpu {
+	struct proc	*sc_cur;	/* current process on this CPU */
+	struct kthread	*sc_curthread;	/* current execution flow */
+	unsigned	sc_cur_pd;	/* page directory currently in CR3 */
+	int		sc_need_resched;/* safe-point reschedule request */
+	struct kthread	*sc_idle;	/* this CPU's scheduler carrier */
+	int		sc_online;
+	unsigned	sc_switches;	/* context switches done here */
+};
+static struct sched_cpu	sched_cpu[MAXCPU];
+static struct kthread	per_cpu_idle[MAXCPU];	/* AP carriers, not pooled */
+/* S413: print one per-CPU summary each time the machine goes idle again. */
+static int		idle_reported;
+
+#define	cur		(sched_cpu[cpu_id()].sc_cur)
+#define	cur_thread	(sched_cpu[cpu_id()].sc_curthread)
+#define	cur_pd		(sched_cpu[cpu_id()].sc_cur_pd)
+#define	need_resched	(sched_cpu[cpu_id()].sc_need_resched)
 /*
  * S411: user VA layout, derived from the boot memory plan instead of the
  * old fixed 48 MB heap / 512 MB mmap constants.  Defaults match a 128 MB
@@ -347,7 +390,6 @@ cur_proc_kthread(void)
 
 	return (cur_thread);
 }
-static unsigned	cur_pd;		/* currently loaded page directory (CR3) */
 static int		next_pid = 2;
 
 /*
@@ -410,6 +452,13 @@ proc_wake(struct proc *p)
 			sched_on_wake(t);	/* boost interactivity, pick quantum */
 			t->t_state = KT_RUN;
 			t->t_wchan = 0;
+			/*
+			 * S413: the woken thread keeps running on the CPU that
+			 * owns it.  Nudge that CPU so it re-runs its scheduler
+			 * now instead of at the next tick.
+			 */
+			if (t->t_oncpu >= 0)
+				smp_resched_cpu(t->t_oncpu);
 		}
 	}
 }
@@ -2936,9 +2985,19 @@ user_page_fault(unsigned va, unsigned err)
 	 * (compress) pages out from under the handler.  See in_fault.
 	 * S410：标记缺页路径，避免 page_alloc() 在处理过程中压缩页面（见 in_fault）。
 	 */
+	/*
+	 * S413: a page fault edits page tables, the zcomp cache and the COW
+	 * tables - all still single-writer structures.  Take the BKL like a
+	 * syscall; nesting is counted, so a fault inside a syscall (ucopyin)
+	 * is free.
+	 * S413：缺页要改页表、zcomp 缓存和 COW 表，这些都还是单写者结构，
+	 * 所以和系统调用一样进 BKL；嵌套会计数，系统调用内部缺页不额外加锁。
+	 */
+	smp_bkl_enter();
 	in_fault = 1;
 	r = user_page_fault_locked(va, err);
 	in_fault = 0;
+	smp_bkl_exit();
 	return (r);
 }
 
@@ -3049,6 +3108,7 @@ proc_table_init(void)
 {
 
 	user_layout_init();
+	spin_init(&proc_table_lock);
 	procs = (struct proc *)kern_table_alloc((unsigned)PROC_TABLE_VA,
 	    (unsigned)NPROC * (unsigned)sizeof(struct proc));
 	printf("usermode: %d proc slots at %x (%d KB)\n", NPROC,
@@ -3060,6 +3120,14 @@ proc_alloc(void)
 {
 	int i;
 
+	/*
+	 * S413: the process table is shared by every CPU, and two forks can
+	 * run at the same time (fork itself serialises on the BKL, but a
+	 * future fine-grained split would not).  The lock makes the scan +
+	 * bzero + claim one step.  It is held only for the initialisation,
+	 * never across a page allocation inside the caller.
+	 */
+	spin_lock(&proc_table_lock);
 	for (i = 0; i < NPROC; i++)
 		if (procs[i].uk_state == P_FREE) {
 			int fd;
@@ -3075,8 +3143,14 @@ proc_alloc(void)
 				procs[i].uk_fds[fd].pipeidx = -1;
 				procs[i].uk_fds[fd].node = -1;
 			}
+			/* still P_FREE until the caller sets P_RUN: a second
+			 * allocator must not see this slot as free, so mark
+			 * it with a private state here. */
+			procs[i].uk_state = P_ALLOC;
+			spin_unlock(&proc_table_lock);
 			return (&procs[i]);
 		}
+	spin_unlock(&proc_table_lock);
 	return (0);
 }
 
@@ -3150,6 +3224,54 @@ proc_children(int pid)
 }
 
 /*
+ * S413: per-CPU scheduler bring-up for an AP.
+ *
+ * The AP owns an "idle" carrier TCB that lives outside the TCB pool, so the
+ * scan below can never hand it to another CPU.  Its kernel stack is the
+ * stack the AP booted on, which is also what its TSS esp0 points at until
+ * the first real thread is dispatched.
+ * S413：为 AP 建立每核调度状态。AP 拥有一个池外的 idle 载体 TCB，下面的扫描
+ * 永远不会把它交给别的核；它的内核栈就是 AP 启动时用的那段，在被第一次真正
+ * 调度前，TSS 的 esp0 也指向这里。
+ */
+void
+sched_percpu_init(int id, unsigned stack_top)
+{
+	struct kthread *t;
+
+	if (id <= 0 || id >= MAXCPU)
+		return;
+	t = &per_cpu_idle[id];
+	bzero(t, sizeof(*t));
+	t->t_state = KT_RUN;
+	t->t_tid = -1;
+	t->t_name = "idle";
+	t->t_used = 1;			/* valid carrier, but not pooled */
+	t->t_proc = 0;
+	t->t_stack_top = stack_top & ~15u;
+	t->t_oncpu = -1;
+	t->t_base_ipl = 0;
+	t->t_preemptable = 1;
+	sched_cpu[id].sc_idle = t;
+	sched_cpu[id].sc_cur = 0;
+	sched_cpu[id].sc_curthread = t;
+	sched_cpu[id].sc_cur_pd = 0;
+	sched_cpu[id].sc_need_resched = 0;
+	sched_cpu[id].sc_switches = 0;
+	sched_cpu[id].sc_online = 1;
+	hal_kernel_stack_set(t->t_stack_top);
+}
+
+/* EN: AP entry into the shared scheduler loop (never returns). */
+void
+ap_sched(void)
+{
+
+	sched_cpu[cpu_id()].sc_online = 1;
+	proc_sched();
+}
+
+/*
  * Pick the next runnable process and return to user mode.
  * Never returns.
  */
@@ -3160,10 +3282,32 @@ proc_sched(void)
 {
 	struct proc *me = cur;
 	struct kthread *mt = cur_thread;
+	int cid = cpu_id();
 	int i;
 
 	for (;;) {
 		unsigned pd_to_load;
+
+		/*
+		 * S413: the caller's kernel epoch ends here, on every path -
+		 * including the "nothing to run, go idle" one.  Dropping the
+		 * BKL only just before resume_user() was not enough: a CPU
+		 * that parks in hlt with the lock still held blocks every
+		 * other CPU in smp_bkl_enter(), which is exactly how the first
+		 * SMP run deadlocked (BSP waiting in wait4, AP spinning on the
+		 * BKL with the `ls` child it had just dispatched).
+		 * S413：调用者的内核临界区在这里结束，所有路径都一样——包括“没活干
+		 * 就去 idle”。只在 resume_user 之前放锁不够：持锁停在 hlt 的核会
+		 * 把其它核全卡在 smp_bkl_enter 里，这正是第一版 SMP 的死锁
+		 * （BSP 在 wait4 里等，AP 拿着刚派发的 ls 子进程在 BKL 上自旋）。
+		 */
+		smp_bkl_drop();
+		/*
+		 * S413: publish TCB slots whose owner threads have already left
+		 * their stacks (see kthread_reap).  `mt` is the stack this CPU
+		 * is on, so its own slot is never recycled under its feet.
+		 */
+		kthread_reap(mt);
 		/*
 		 * S21: kernel threads (softirq, page reclaim, IRP workers)
 		 * get their own execution carrier first.
@@ -3180,6 +3324,14 @@ proc_sched(void)
 			struct sysregs *regs;
 			int main_thread;
 
+			/*
+			 * S413: with AP user dispatch switched off, an AP keeps
+			 * its LAPIC/IPI path alive but never runs user threads;
+			 * the BSP stays the only scheduler, exactly like the
+			 * pre-S413 build.  `smpuser` toggles this at runtime.
+			 */
+			if (cid != 0 && !smp_user_dispatch)
+				break;
 			/* KLT runnable decision: per-TCB state, plus a single-
 			 * threaded process may be blocked as a whole (classic
 			 * wait/pipe semantics).  A multi-threaded process stays
@@ -3188,37 +3340,101 @@ proc_sched(void)
 				continue;
 			if (t->t_state != KT_RUN)
 				continue;
-			p = t->t_proc;
-			if (p->uk_state == P_FREE || p->uk_state == P_ZOMBIE)
+			/*
+			 * S413: the claim is the SMP-critical part.  It
+			 * fails when another CPU already owns the TCB, which
+			 * is how N CPUs walk the same table without ever
+			 * running one thread twice (or sharing its kernel
+			 * stack).  A thread stays owned by its CPU until it
+			 * exits, so this is a placement rule, not a lock.
+			 */
+			if (!kthread_claim_cpu(t, cid))
 				continue;
+			p = t->t_proc;
+			if (p->uk_state == P_FREE || p->uk_state == P_ZOMBIE ||
+			    p->uk_state == P_ALLOC) {
+				/*
+				 * S413: only give up a claim we actually own.
+				 * The old code called kthread_release_cpu()
+				 * unconditionally here, so a CPU scanning a
+				 * blocked thread revoked *another* CPU's
+				 * ownership - which is how an AP ended up
+				 * dispatching the shell that the BSP was
+				 * waiting on.
+				 */
+				if (t->t_oncpu == cid)
+					kthread_release_cpu(t);
+				continue;
+			}
 			main_thread = (t->t_tid == p->uk_pid);
 			/* a whole-process block (single thread) stops the main TCB */
-			if (p->uk_state == P_BLOCKED && p->uk_p_nthreads <= 1)
+			if (p->uk_state == P_BLOCKED && p->uk_p_nthreads <= 1) {
+				if (t->t_oncpu == cid)
+					kthread_release_cpu(t);
 				continue;
+			}
 			regs = main_thread ? &p->uk_regs : &t->t_regs;
 			cur = p;
 			cur_thread = t;
+			cpus[cid].ci_curthread = t;
 			/* KLT: pass 0 to resume_user when staying in the same
 			 * address space (it then keeps CR3); a nonzero pd both
 			 * updates cur_pd and is loaded by resume_user. */
 			pd_to_load = switch_pd_for(p);
 			hal_kernel_stack_set(t->t_stack_top);
 			sig_deliver(p, regs);
-			if (t->t_state == KT_RUN)
+			if (t->t_state == KT_RUN) {
+				/* Leaving kernel cooperation: the BKL must not
+				 * travel into user mode on this CPU. */
+				if (kstack_overflowed(t))
+					printf("smp: STACK OVERFLOW tid %d cpu %d\n",
+					    t->t_tid, cid);
+				smp_bkl_drop();
+				sched_cpu[cid].sc_switches++;
+				idle_reported = 0;	/* work was dispatched */
 				resume_user(pd_to_load, regs);
+			}
+			kthread_release_cpu(t);	/* sig_deliver killed it */
 		}
-		if (mt != 0 && mt->t_state == KT_RUN && me->uk_state != P_ZOMBIE) {
+		if (me != 0 && mt != 0 && mt->t_state == KT_RUN &&
+		    me->uk_state != P_ZOMBIE) {
 			cur = me;
 			cur_thread = mt;
+			cpus[cid].ci_curthread = mt;
 			pd_to_load = switch_pd_for(me);
 			hal_kernel_stack_set(mt->t_stack_top);
 			sig_deliver(me, &me->uk_regs);
+			smp_bkl_drop();
+			sched_cpu[cid].sc_switches++;
 			resume_user(pd_to_load, &me->uk_regs);
 		}
 		/* nothing runnable: let deferred work drain, then halt */
 		kthread_run();
 		if (kthread_runnable())
 			continue;
+		/*
+		 * S413: with SMP on, an idle CPU must stay in the loop: a
+		 * woken thread can be claimed here at any time, and the BSP
+		 * itself may have work again.  Interrupts are enabled before
+		 * hlt so the next tick/IPI brings us back.
+		 * S413：开 SMP 后空闲核要留在循环里——随时可能有被唤醒的线程归它领，
+		 * BSP 自己也可能又有活。hlt 前开中断，下一个 tick/IPI 会把它叫回来。
+		 */
+		if (smp_enabled) {
+			/*
+			 * S413: one summary per busy->idle transition so the
+			 * multi-core work is visible: the per-CPU switch
+			 * counts only differ if user threads really ran on
+			 * more than one CPU.
+			 */
+			if (!idle_reported) {
+				idle_reported = 1;
+				if (cid == 0)
+					smp_print();
+			}
+			__asm __volatile("sti; hlt");
+			continue;
+		}
 		printf("\n[no runnable process]\n");
 		/*
 		 * Idle report: physical pages still held when the last process
@@ -3247,8 +3463,146 @@ proc_sched(void)
  * switch while the interrupted context is in kernel mode: kernel-side
  * deferred work is handled at syscall exit via softirq_dispatch().
  */
-int	need_resched;
 unsigned sched_switches;
+
+/*
+ * S413: runtime switch for AP user-thread dispatch (monitor `smpuser`).
+ * Default OFF: smpon brings the APs up (per-CPU TSS, scheduler state, IPI),
+ * and `smpuser` additionally lets them dispatch user threads.  It is off by
+ * default because some workloads still trip over the coarse kernel locking
+ * (see os_smp.md section 7); with it off the system behaves exactly like the
+ * single-CPU build, only with the APs parked in hlt.
+ * S413：AP 运行用户线程的运行时开关（monitor `smpuser`）。默认开：
+ * smpon + 这个开关才让用户线程真正跑在多个核上。关掉后 AP 仍在线（IPI 通路
+ * 正常），但只有 BSP 做调度——遇到内核锁粒度不足导致的负载时，这是安全退路。
+ */
+int	smp_user_dispatch = 0;
+
+/*
+ * S413: need_resched is per-CPU now (see sched_cpu above).  The clock
+ * interrupt still has to ask for a reschedule, but timer.c is a separate
+ * translation unit and cannot see the macro, so it calls these.
+ */
+void
+smp_need_resched(void)
+{
+
+	need_resched = 1;
+}
+
+int
+smp_resched_pending(void)
+{
+
+	return (need_resched);
+}
+
+/* EN: S413: per-CPU context-switch counter (monitor 'smpinfo'). */
+unsigned
+sched_cpu_switches(int id)
+{
+
+	return ((id >= 0 && id < MAXCPU) ? sched_cpu[id].sc_switches : 0);
+}
+
+/*
+ * S413: wake one other CPU's scheduler.
+ *
+ * A freshly published thread (fork/clone) is unowned, so any CPU may take
+ * it - but an idle AP sits in `hlt` and would only notice at the next clock
+ * tick.  Kicking one AP in round-robin order makes a fork land on a second
+ * CPU immediately, which is what turns "N CPUs online" into "N CPUs doing
+ * work".  The IPI is advisory: if that CPU is busy it just sets its
+ * reschedule flag.
+ * S413：唤醒另一个核的调度器。新发布的线程无人占用，任何核都能领；但空闲 AP
+ * 停在 hlt 里，要等下一个时钟才醒。按轮转踢一个 AP，fork 就能立刻落到第二个
+ * 核上——这才把"在线 N 核"变成"N 核都在干活"。IPI 只是提示，对方忙就只置标志。
+ */
+static int kick_next = 1;
+
+static void
+sched_kick_other(void)
+{
+	int id;
+
+	if (!smp_enabled || ncpu <= 1)
+		return;
+	if (kick_next < 1 || kick_next >= ncpu)
+		kick_next = 1;
+	id = kick_next;
+	kick_next = (kick_next + 1 >= ncpu) ? 1 : kick_next + 1;
+	smp_resched_cpu(id);
+}
+
+/* ------------------------------------------------------------------ */
+/* S413: big kernel lock                                              */
+/* ------------------------------------------------------------------ */
+
+/*
+ * User code runs in parallel on every CPU.  The kernel is not yet split
+ * into fine-grained locks (proc table, VFS, pipes, address space and the
+ * page allocator all assume they are alone), so kernel entries serialize
+ * on one lock.  This is deliberately the Linux 2.0 model: correctness
+ * first, user-space parallelism now, kernel parallelism later.
+ *
+ * Contract:
+ *   - smp_bkl_enter() at a kernel entry (syscall, user page fault);
+ *   - smp_bkl_exit() when the CPU returns to user mode;
+ *   - smp_bkl_drop() right before a context switch, because the CPU may
+ *     not return to this code path at all and the other CPUs must not
+ *     spin behind a thread that is asleep.
+ * The owner is recorded so a nested entry on the same CPU does not
+ * self-deadlock, and drop/exit are safe to call when not held.
+ */
+static struct spinlock	smp_bkl_lock;
+static volatile int	smp_bkl_owner = -1;
+static int		smp_bkl_depth;
+static unsigned		smp_bkl_waits;
+
+void
+smp_bkl_enter(void)
+{
+	int me = cpu_id();
+
+	if (smp_bkl_owner == me) {	/* nested kernel entry on this CPU */
+		smp_bkl_depth++;
+		return;
+	}
+	spin_lock(&smp_bkl_lock);
+	smp_bkl_owner = me;
+	smp_bkl_depth = 1;
+}
+
+void
+smp_bkl_exit(void)
+{
+	int me = cpu_id();
+
+	if (smp_bkl_owner != me)
+		return;
+	if (--smp_bkl_depth > 0)
+		return;
+	smp_bkl_owner = -1;
+	spin_unlock(&smp_bkl_lock);
+}
+
+int
+smp_bkl_held(void)
+{
+
+	return (smp_bkl_owner == cpu_id());
+}
+
+/* EN: Release the BKL before this CPU switches to another thread. */
+void
+smp_bkl_drop(void)
+{
+
+	if (!smp_bkl_held())
+		return;
+	smp_bkl_depth = 1;		/* collapse nesting: we are leaving */
+	smp_bkl_exit();
+}
 
 /*
  * Process-level fairness (BSD estcpu style).  CPU usage is charged to the
@@ -3313,7 +3667,8 @@ tcb_runnable(struct kthread *t)
 	if (t == 0 || !t->t_used || t->t_proc == 0 || t->t_state != KT_RUN)
 		return (0);
 	p = t->t_proc;
-	if (p->uk_state == P_FREE || p->uk_state == P_ZOMBIE)
+	if (p->uk_state == P_FREE || p->uk_state == P_ZOMBIE ||
+	    p->uk_state == P_ALLOC)
 		return (0);
 	if (p->uk_state == P_BLOCKED && p->uk_p_nthreads <= 1)
 		return (0);
@@ -3355,6 +3710,7 @@ fair_pick_next(struct kthread *me)
 {
 	struct kthread *best = 0;
 	int best_prio = -1, i, start;
+	int cid = cpu_id();
 
 	start = (me != 0) ? (me - kthreads) : 0;
 	for (i = 0; i < nkthread; i++) {
@@ -3362,6 +3718,18 @@ fair_pick_next(struct kthread *me)
 		int prio;
 
 		if (t == me || !tcb_runnable(t))
+			continue;
+		/*
+		 * S413: a TCB owned by another CPU is not a candidate here.
+		 * This single test is what turns one shared scan into N
+		 * independent per-CPU dispatchers: every CPU walks the same
+		 * table, but each may only take threads nobody owns, so the
+		 * CPUs naturally spread over the runnable set.
+		 * S413：属于别的核的 TCB 不是本核的候选。就是这一句把一个共享扫描
+		 * 变成了 N 个独立的每核分发器：所有核走同一张表，但只能领没人占的
+		 * 线程，于是自然分摊到不同核上。
+		 */
+		if (kthread_owned_by_other(t, cid))
 			continue;
 		prio = sched_effective_prio(t);
 		if (best == 0 || prio > best_prio ||
@@ -3458,8 +3826,23 @@ sched_tick(struct sysregs *r)
 	p = t->t_proc;
 	main_thread = (t->t_tid == p->uk_pid);
 	regs = main_thread ? &p->uk_regs : &t->t_regs;
+	/*
+	 * S413: claim before resuming.  If another CPU grabbed the thread in
+	 * the window between the scan and here, keep running the current one
+	 * instead of putting two CPUs on one kernel stack.
+	 * S413：恢复前先领。如果在扫描到这里之间别的核抢先领走了，就继续跑
+	 * 当前线程，绝不让两个核同时落在一个内核栈上。
+	 */
+	if (!kthread_claim_cpu(t, cpu_id())) {
+		if (me->t_tid == mp->uk_pid)
+			mp->uk_regs = *r;
+		else
+			me->t_regs = *r;
+		return;
+	}
 	cur = p;
 	cur_thread = t;
+	cpus[cpu_id()].ci_curthread = t;
 	/* KLT: irq0's iret does not reload CR3, so switch it here —
 	 * but only when the selected thread is from another process.
 	 * Same-process thread switches keep the current page table. */
@@ -3470,7 +3853,8 @@ sched_tick(struct sysregs *r)
 	hal_kernel_stack_set(t->t_stack_top);
 	*r = *regs;
 	hal_intr_user_resume(r);
-	sched_switches++;
+	(void)atomic_add((volatile int *)&sched_switches, 1);
+	sched_cpu[cpu_id()].sc_switches++;
 }
 
 /* 中文：fork 实现：分配子进程、COW 克隆地址空间、继承 fd/管道/工作目录、复制上下文，子进程返回 0，父进程返回子 pid */
@@ -3490,11 +3874,10 @@ do_fork(struct sysregs *r)
 	}
 	hal_address_space_activate(cur->uk_pd);		/* flush the parent's stale writable TLBs */
 	p->uk_state = P_RUN;
-	p->uk_pid = next_pid++;
+	p->uk_pid = atomic_add(&next_pid, 1);
 	p->uk_ppid = cur->uk_pid;
 	p->uk_pd = pd;
-	(void)proc_add_thread(p, p->uk_pid);
-	p->uk_p_next_tid = TID_USER_BASE + p->uk_pid * TID_STRIDE;
+	(void)proc_add_thread(p, p->uk_pid);	p->uk_p_next_tid = TID_USER_BASE + p->uk_pid * TID_STRIDE;
 	p->uk_brk_mapped = cur->uk_brk_mapped;
 	bcopy(cur->uk_p_cwd, p->uk_p_cwd, sizeof(p->uk_p_cwd));
 	bcopy(cur->uk_p_comm, p->uk_p_comm, sizeof(p->uk_p_comm));
@@ -3516,6 +3899,17 @@ do_fork(struct sysregs *r)
 	}
 	p->uk_regs = *r;
 	p->uk_regs.eax = 0;		/* the child returns 0 from fork() */
+	/*
+	 * S413: publish the child last.  The TCB was created KT_BLOCK, so no
+	 * CPU could dispatch it while uk_pd / uk_regs were still being filled;
+	 * flipping it to KT_RUN here is the single point where the child
+	 * becomes visible to every scheduler.
+	 * S413：最后才发布子进程。TCB 建出来是 KT_BLOCK，填 uk_pd / uk_regs 期间
+	 * 没有核能派发它；这里置 KT_RUN 是子进程对所有调度器可见的唯一时刻。
+	 */
+	if (p->uk_p_thread != 0)
+		p->uk_p_thread->t_state = KT_RUN;
+	sched_kick_other();		/* let an idle AP take the child now */
 
 	return (p->uk_pid);
 }
@@ -3544,7 +3938,7 @@ do_vfork(struct sysregs *r)
 	}
 	hal_address_space_activate(cur->uk_pd);
 	p->uk_state = P_RUN;
-	p->uk_pid = next_pid++;
+	p->uk_pid = atomic_add(&next_pid, 1);
 	p->uk_ppid = cur->uk_pid;
 	p->uk_pd = pd;
 	(void)proc_add_thread(p, p->uk_pid);
@@ -3556,6 +3950,10 @@ do_vfork(struct sysregs *r)
 	p->uk_regs = *r;
 	p->uk_regs.eax = 0;
 	p->uk_vfork_child = 1;
+	/* S413: same publish-last rule as do_fork(). */
+	if (p->uk_p_thread != 0)
+		p->uk_p_thread->t_state = KT_RUN;
+	sched_kick_other();
 
 	/* the parent blocks until the child execs or exits */
 	cur->uk_regs = *r;
@@ -6074,6 +6472,17 @@ void
 syscall_dispatch(struct sysregs *r)
 {
 
+	/*
+	 * S413: kernel entries serialise on the big kernel lock.  It is
+	 * released on the way back to user mode and (via smp_bkl_drop) before
+	 * any context switch, so a blocking syscall does not stall the other
+	 * CPUs; user mode itself always runs unlocked, which is where the
+	 * parallelism comes from.
+	 * S413：内核入口统一进大内核锁；回用户态时释放，切换线程前由
+	 * smp_bkl_drop 释放，所以阻塞系统调用不会拖住别的核；用户态本身始终
+	 * 不带锁，并行度就来自这里。
+	 */
+	smp_bkl_enter();
 	(void)bsd45_syscall(r);		/* writes the result into r->eax itself */
 	/*
 	 * Syscall exit is a safe point: drain deferred work before deciding
@@ -6100,8 +6509,11 @@ syscall_dispatch(struct sysregs *r)
 			cur_thread->t_regs = *r;
 			cur_thread->t_state = KT_RUN;
 		}
+		/* proc_sched() drops the BKL itself before resuming a
+		 * thread, and never returns. */
 		proc_sched();
 	}
+	smp_bkl_exit();
 }
 
 /* 中文：安装系统调用门：委托 HAL 的 hal_syscall_gate_init 完成 IDT 设置 */
@@ -6191,8 +6603,25 @@ start_prog(const char *path, const char *script)
 	next_pid = 2;
 	(void)proc_add_thread(cur, 1);
 	cur->uk_p_next_tid = TID_USER_BASE + 1 * TID_STRIDE;
-	if (cur->uk_p_thread != 0)
+	if (cur->uk_p_thread != 0) {
 		hal_kernel_stack_set(cur->uk_p_thread->t_stack_top);
+		/* S413: the pid-1 TCB becomes runnable only now that its
+		 * address space, stack and registers are all in place. */
+		cur->uk_p_thread->t_state = KT_RUN;
+		/*
+		 * S413: and it belongs to the CPU that is about to run it.
+		 * enter_user() below jumps straight into ring 3 without going
+		 * through the scheduler, so without this claim an AP could
+		 * claim the same TCB and run pid 1 on a second CPU (same
+		 * kernel stack, same address space) - which is exactly how the
+		 * first SMP port died, during init's execve.
+		 * S413：它属于即将运行它的这个核。下面的 enter_user 直接跳进 ring3，
+		 * 不经过调度器；不在这里占位的话，AP 会领走同一个 TCB，在两个核上同时
+		 * 跑 pid 1（同一内核栈、同一地址空间）——S413 第一版就死在 init 的
+		 * execve 期间。
+		 */
+		(void)kthread_claim_cpu(cur->uk_p_thread, cpu_id());
+	}
 
 	syscall_gate_init();
 	printf("exec %s: entry %x pd %x\n", path, entry, pd);

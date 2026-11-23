@@ -27,7 +27,7 @@
 | ISO→虚拟磁盘安装指南 | [`bsd45/vms/README-INSTALL.md`](bsd45/vms/README-INSTALL.md) |
 | 缓存 / mmap / 地址空间设计 | [`docs/cache-mmap.md`](docs/cache-mmap.md)、[`os_vm.md`](os_vm.md) |
 | 调度 / 优先级实现 | [`docs/kernel-preemption.md`](docs/kernel-preemption.md)、[`os_sched.md`](os_sched.md) |
-| SMP / 多核适配（CPUID 拓扑、AP 启动、IPI） | [`os_smp.md`](os_smp.md) |
+| SMP / 多核适配（拓扑、AP、每核 TSS、多核调度、IPI） | [`os_smp.md`](os_smp.md) |
 | 文件系统实现清单（ISO9660/FFS/JLFS/tmpfs） | [`os_fs.md`](os_fs.md) |
 | 进程与线程实现（proc/TCB、fork/exec、KLT） | [`os_thread-process.md`](os_thread-process.md) |
 | 设计与路线（历史规划） | [`docs/object-kernel.md`](docs/object-kernel.md)、[`os.md`](os.md) |
@@ -84,16 +84,22 @@
 - `arch/i386/io.h` + `x86.asm`：端口 I/O 与 CPU 控制（原 `hal.h` 内容）。
 - `arch/i386/ctx.c`：上下文切换钩子（TSS esp0、`kswitch`、地址空间、系统调用门）。
 
-### SMP（S412：拓扑识别 + AP 上线 + IPI）
+### SMP（S413：每核上下文 + TSS + TCB 归属 + AP 调度）
 
 - `kernel/include/sys/smp.h`、`kernel/arch/i386/smp.c`：CPUID 动态拓扑
-  （逻辑 CPU / 物理核 / SMT / HTT）、per-CPU 结构、自旋锁、Local APIC、
-  INIT-SIPI-SIPI、IPI/TLB shootdown 统计。
-- `kernel/arch/i386/ap_tramp.s`：独立链接在物理 0x7000 的实模式 trampoline，
-  自带页内临时 GDT；`kernel/arch/i386/smp_ipi.s`：IPI 中断 stub。
-- 当前状态：`smpon` 可把 AP 拉起（VMware 实测 2 CPU online），IPI 能在 AP
-  上执行；**用户进程/线程的跨核调度尚未接管**，BSP 仍是唯一调度器。
-  下一阶段设计见 [`os_smp.md`](os_smp.md) 第 6 节。
+  （逻辑 CPU / 物理核 / SMT / HTT）、`MAXCPU=16`、每 CPU TSS、Local APIC、
+  INIT-SIPI-SIPI、IPI/TLB shootdown 统计。CPU 身份由 `str`（TSS 选择子）
+  解码，没有「当前 CPU」全局变量。
+- `kernel/arch/i386/ap_tramp.s`：独立链接在物理 0x7000 的实模式 trampoline；
+  `kernel/arch/i386/smp_ipi.s`：IPI 中断 stub。
+- 调度器：`cur/cur_thread/cur_pd/need_resched` 全部 per-CPU；TCB 用
+  `t_oncpu` 原子归属，一个 TCB 只在一个核上跑；AP 调 `proc_sched()`，
+  用户进程/线程可并行跑在多个核上。内核态用一把大内核锁（BKL）串行化，
+  用户态无锁并行；TCB 槽位延迟回收，内核栈带溢出金丝雀。
+- 开关：`smpon`（AP 上线）+ `smpuser`（AP 是否参与用户调度，默认关；
+  `os_smp.md` §5.2 记录了仍存在的 TRAP 12 与排查方向）。
+- monitor：`cpuinfo` / `smpon` / `smpuser` / `smpping` / `smpinfo` /
+  `memplan`。详见 [`os_smp.md`](os_smp.md)。
 
 ### 用户态 / 工具链 / 安装
 
@@ -119,7 +125,7 @@
 | 16 级 IPL (`kernel/hal/ipl.c`) | **已删除** | 由 20 级优先级调度取代 |
 | `kernel/obj/`、`kernel/other/` | **已删除/合并** | 内容并入 `lib/`、`sys/` |
 | `bsd45/src/`（原始 tarball 解包树） | **已删除** | 已合并进 kernel/libc，构建不需要 tarball |
-| 完整 SMP（AP 启动、多核调度、IPI、TLB shootdown） | **未实现** | 只有基础设施；系统单核运行 |
+| 完整 SMP | **部分实现** | AP 上线 / 每核 TSS / 多核用户调度已可用；`smpuser` 默认关，见 `os_smp.md` §5.2 |
 | `microkernel/`、`monolithickernel/` | 占位/设计 | 非运行代码 |
 
 ## 快速构建

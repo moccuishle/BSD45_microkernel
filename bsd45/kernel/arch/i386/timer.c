@@ -18,7 +18,8 @@
 #include "sys/platform.h"
 
 extern void sched_tick(struct sysregs *r);
-extern int need_resched;
+/* S413: need_resched is per-CPU now; set it through the scheduler. */
+extern void smp_need_resched(void);
 extern unsigned sched_switches;
 extern void irq0_entry(void);
 extern void setidt(int idx, char *func, int typ, int dpl);
@@ -95,7 +96,7 @@ clock_irq(struct sysregs *r)
 	}
 
 	if (clock_quantum == 0 || (clock_ticks % clock_quantum) == 0)
-		need_resched = 1;
+		smp_need_resched();
 
 	/* end of interrupt before we possibly switch address spaces */
 	hal_clock_eoi();

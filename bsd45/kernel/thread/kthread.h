@@ -120,6 +120,13 @@ struct kthread {
 	int		t_starve;	/* ticks waiting: anti-starvation boost */
 	int		t_cpu_burst;	/* consecutive CPU ticks: CPU-bound detector */
 	int		t_lastcpu;	/* affinity: last CPU this thread ran on */
+	/* S413: the CPU that currently owns this TCB, -1 when unowned.  A TCB
+	 * is only ever resumed by its owner, which is what stops two CPUs
+	 * from running the same thread (and sharing its kernel stack). */
+	int		t_oncpu;
+	/* S413: slot was released by the thread still running on it.  The
+	 * slot may not be handed out again until the CPU leaves that stack. */
+	int		t_reap_cpu;
 	void		*t_wchan;	/* non-NULL => blocked on this channel */
 	struct kthread	*t_wqnext;	/* S200: next TCB on a sync wait queue */
 	struct sysregs	t_regs;
@@ -154,6 +161,12 @@ struct kthread *kthread_spawn(const char *name, void (*entry)(void *),
 struct kthread *kthread_user_spawn(struct proc *p, int tid);
 struct kthread *kthread_user_find(int tid);
 void	kthread_user_free(struct kthread *t);
+/* S413: CPU ownership of a TCB (atomic claim, see kthread.c). */
+int	kthread_claim_cpu(struct kthread *t, int id);
+void	kthread_release_cpu(struct kthread *t);
+int	kthread_owned_by_other(struct kthread *t, int id);
+void	kthread_reap(struct kthread *leaving);
+int	kstack_overflowed(struct kthread *t);
 void	kthread_exit(void);
 void	kthread_block(void);
 void	kthread_wake(struct kthread *t);

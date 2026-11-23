@@ -14,6 +14,7 @@
 #include <sys/proc.h>		/* struct proc: owning kernel process object */
 #include "thread/kthread.h"
 #include "sys/platform.h"
+#include "sys/smp.h"		/* S413: spinlock, cpu_id() */
 
 #ifndef PAGE_SIZE
 #define	PAGE_SIZE	4096
@@ -92,8 +93,98 @@ kthread_prime_stacks(void)
 		(void)kern_table_alloc(va, PAGE_SIZE);
 }
 static unsigned	sched_esp;
+int	smpdbg = 0;	/* S413: temporary slot-recycle tracing */
 struct kthread	*curk;
 unsigned	kthread_switches;
+
+/*
+ * S413: allocation of TCB slots and CPU ownership.
+ *
+ * Two CPUs can call kthread_user_spawn() (fork on both) or dispatch the same
+ * scan at the same time, so slot allocation and the "who runs this TCB" bit
+ * both need to be atomic.  t_oncpu is claimed with cmpxchg; the owner is the
+ * only CPU allowed to resume the thread, which also guarantees its per-thread
+ * kernel stack is never touched by two CPUs at once.
+ */
+static struct spinlock kthread_alloc_lock;
+
+int
+kthread_claim_cpu(struct kthread *t, int id)
+{
+	int prev;
+
+	if (t == 0)
+		return (0);
+	if (t->t_oncpu == id)
+		return (1);			/* already ours */
+	prev = atomic_cmpxchg(&t->t_oncpu, -1, id);
+	if (prev == -1) {
+		t->t_lastcpu = id;
+		return (1);
+	}
+	return (prev == id);
+}
+
+void
+kthread_release_cpu(struct kthread *t)
+{
+
+	if (t != 0)
+		(void)atomic_xchg(&t->t_oncpu, -1);
+}
+
+int
+kthread_owned_by_other(struct kthread *t, int id)
+{
+
+	return (t != 0 && t->t_oncpu >= 0 && t->t_oncpu != id);
+}
+
+/* S413: TCB slots waiting for their CPU to leave the stack. */
+static int		nreap[MAXCPU];
+
+/*
+ * Publish the slots that were released by a thread which is still running on
+ * its own kernel stack.
+ *
+ * The exiting thread frees its own TCB while executing on that TCB's stack,
+ * and then enters the scheduler on it.  On one CPU that is harmless: nothing
+ * else can pick the slot until the scheduler has moved on.  With two CPUs the
+ * slot is visible immediately, so a fork on the other CPU can be handed the
+ * same stack and both CPUs then scribble over each other - which showed up as
+ * TRAP 12 with a frame made of user-space addresses.
+ *
+ * `leaving` is the TCB whose stack this CPU is currently on; a slot freed by
+ * that very thread may only be published once the CPU runs the scheduler on
+ * some other stack.
+ * S413：退出线程在自己栈上释放自己的 TCB，然后在这张栈上进调度器。单核下
+ * 无害，双核下另一个核的 fork 可能立刻拿到同一张栈，两核互相踩——表现为
+ * TRAP 12 且栈帧里全是用户地址。leaving 是本核当前所在栈的 TCB，它的槽位
+ * 必须等本核换到别的栈上之后才能发布。
+ */
+void
+kthread_reap(struct kthread *leaving)
+{
+	int id = cpu_id(), i;
+
+	if (id < 0 || id >= MAXCPU || nreap[id] <= 0)
+		return;
+	for (i = 0; i < nkthread && nreap[id] > 0; i++) {
+		struct kthread *t = &kthreads[i];
+
+		if (!t->t_used || t->t_reap_cpu != id)
+			continue;
+		if (t == leaving)
+			continue;	/* this CPU is still on that stack */
+		if (smpdbg)
+			printf("smp: reap cpu%d slot %d tid %d\n", id, i, t->t_tid);
+		t->t_reap_cpu = -1;
+		t->t_used = 0;
+		t->t_oncpu = -1;
+		t->t_state = KT_FREE;
+		nreap[id]--;
+	}
+}
 
 /*
  * Explicit run queue of TCBs.  The scheduler only ever looks at this queue;
@@ -182,6 +273,10 @@ kthread_trampoline(void)
  * 延迟回收最多只能拿回 2MB，不值得冒 use-after-free 的风险。
  */
 static unsigned char	kstack_mapped[NKTHREAD_MAX];
+/* S413: value parked at the bottom of every kernel stack.  A clobbered
+ * canary means the stack overflowed into the neighbouring slot, which under
+ * SMP corrupts whichever thread happens to live there. */
+#define	KSTACK_CANARY	0x4b535443u	/* "KSTC" */
 
 /*
  * Map (or reuse) the kernel stack for TCB slot i.  Returns 0, or -1 for a
@@ -201,6 +296,7 @@ kstack_alloc(int i)
 	if (kstack_mapped[i]) {
 		/* Reused slot: drop the previous thread's frames. */
 		bzero(va, KSTACK_SIZE);
+		*(unsigned *)va = KSTACK_CANARY;	/* S413: overflow guard */
 		return (0);
 	}
 	for (j = 0; j < KSTACK_SIZE; j += PAGE_SIZE) {
@@ -209,8 +305,19 @@ kstack_alloc(int i)
 		    (vm_offset_t)pa + PAGE_SIZE,
 		    VM_PROT_READ | VM_PROT_WRITE);
 	}
+	*(unsigned *)va = KSTACK_CANARY;	/* S413: overflow guard at the base */
 	kstack_mapped[i] = 1;
 	return (0);
+}
+
+/* S413: did this thread's stack grow past its 16 KB window? */
+int
+kstack_overflowed(struct kthread *t)
+{
+
+	if (t == 0 || t->t_stack_va == 0)
+		return (0);
+	return (*(volatile unsigned *)t->t_stack_va != KSTACK_CANARY);
 }
 
 /* 中文：初始化内核线程池，清空所有线程槽位为 FREE 状态 */
@@ -228,13 +335,41 @@ kthread_init(void)
 	sched_esp = 0;
 	kthread_switches = 0;
 	rq_head = rq_tail = 0;
+	spin_init(&kthread_alloc_lock);
 	for (i = 0; i < nkthread; i++) {
 		kthreads[i].t_state = KT_FREE;
 		kthreads[i].t_proc = 0;
 		kthreads[i].t_used = 0;
+		kthreads[i].t_oncpu = -1;
+		kthreads[i].t_reap_cpu = -1;
 	}
 	printf("kthread: %d thread slots at %x (%d KB stacks)\n", nkthread,
 	    KSTACK_VA, KSTACK_SIZE / 1024);
+}
+
+/*
+ * S413: reserve a free TCB slot with the pool lock held.
+ *
+ * The lock stays held until the caller has finished initialising the slot:
+ * once t_used is set another CPU's scheduler scan may pick the TCB, and a
+ * half-built TCB (stale t_proc, t_state == 0) would be dispatched.
+ * S413：在持有池锁的情况下预留 TCB 槽位；调用者初始化完成前不释放锁，
+ * 因为一旦 t_used 置位，另一个核的调度扫描就可能选中它。
+ */
+static struct kthread *
+tcb_reserve(int *idxp)
+{
+	int i;
+
+	spin_lock(&kthread_alloc_lock);
+	for (i = 0; i < nkthread; i++) {
+		if (!kthreads[i].t_used) {
+			*idxp = i;
+			return (&kthreads[i]);
+		}
+	}
+	spin_unlock(&kthread_alloc_lock);
+	return (0);
 }
 
 /* 中文：创建一个内核线程，分配槽位、设置入口和栈并初始化切换上下文 */
@@ -242,16 +377,11 @@ kthread_init(void)
 struct kthread *
 kthread_spawn(const char *name, void (*entry)(void *), void *arg)
 {
-	struct kthread *t = 0;
+	struct kthread *t;
 	unsigned *sp;
 	int i;
 
-	for (i = 0; i < nkthread; i++)
-		if (!kthreads[i].t_used) {
-			t = &kthreads[i];
-			break;
-		}
-	if (t == 0)
+	if ((t = tcb_reserve(&i)) == 0)
 		return (0);
 	bzero(t, sizeof(*t));
 	t->t_state = KT_RUN;
@@ -261,6 +391,8 @@ kthread_spawn(const char *name, void (*entry)(void *), void *arg)
 	t->t_arg = arg;
 	t->t_used = 1;
 	t->t_proc = 0;
+	t->t_oncpu = -1;		/* unowned: any CPU may take it */
+	t->t_reap_cpu = -1;
 	t->t_base_ipl = 0;
 	t->t_eff_ipl = 0;
 	t->t_preemptable = 1;
@@ -279,6 +411,7 @@ kthread_spawn(const char *name, void (*entry)(void *), void *arg)
 	t->t_lastcpu = 0;		/* no affinity yet */
 	sched_prio_init(t, PRI_NORMAL);
 	rq_enqueue(t);			/* runnable TCB enters the run queue */
+	spin_unlock(&kthread_alloc_lock);
 	printf("kthread: spawn %s tid %d\n", name, t->t_tid);
 	return (t);
 }
@@ -288,22 +421,33 @@ kthread_spawn(const char *name, void (*entry)(void *), void *arg)
 struct kthread *
 kthread_user_spawn(struct proc *p, int tid)
 {
-	struct kthread *t = 0;
+	struct kthread *t;
 	int i;
 
-	for (i = 0; i < nkthread; i++)
-		if (!kthreads[i].t_used) {
-			t = &kthreads[i];
-			break;
-		}
-	if (t == 0)
+	if ((t = tcb_reserve(&i)) == 0)
 		return (0);
+	if (smpdbg)
+		printf("smp: alloc slot %d tid %d\n", i, tid);
 	bzero(t, sizeof(*t));
-	t->t_state = KT_RUN;
+	/*
+	 * S413: a new user TCB starts BLOCKED, not runnable.
+	 *
+	 * The caller fills t_regs / the process's uk_regs *after* this returns.
+	 * Publishing it as KT_RUN here is a uniprocessor-safe race that SMP
+	 * turns fatal: another CPU can dispatch the TCB in the window and
+	 * iret to eip=0 (general protection at resume_user's iret).  The
+	 * caller flips it to KT_RUN once the context is valid.
+	 * S413：新用户 TCB 先置 BLOCK 而不是 RUN。调用者在这之后才填 t_regs /
+	 * 进程的 uk_regs；在这里就置 RUN 是单核下安全的竞态，SMP 下会让另一个核
+	 * 在这个窗口里派发它，iret 到 eip=0（resume_user 的 iret 触发 GP）。
+	 */
+	t->t_state = KT_BLOCK;
 	t->t_tid = tid;
 	t->t_name = "user";
 	t->t_used = 1;
 	t->t_proc = p;
+	t->t_oncpu = -1;		/* first CPU to claim it runs it */
+	t->t_reap_cpu = -1;
 	t->t_base_ipl = 0;
 	t->t_eff_ipl = 0;
 	t->t_preemptable = 1;
@@ -328,6 +472,7 @@ kthread_user_spawn(struct proc *p, int tid)
 	t->t_stack_va = (void *)(KSTACK_VA + i * KSTACK_SIZE);
 	t->t_stack_top = (unsigned)t->t_stack_va + KSTACK_SIZE;
 	t->t_stack_top &= ~15u;
+	spin_unlock(&kthread_alloc_lock);	/* S413: slot is complete now */
 	return (t);
 }
 
@@ -371,7 +516,22 @@ kthread_user_free(struct kthread *t)
 	t->t_state = KT_FREE;
 	t->t_proc = 0;
 	t->t_next = 0;
+	/*
+	 * S413: if this CPU is running on this very TCB's stack, the slot
+	 * cannot be handed out yet - see kthread_reap().
+	 */
+	if (t == cur_proc_kthread()) {
+		if (smpdbg)
+			printf("smp: defer cpu%d slot %d tid %d\n", cpu_id(),
+			    (int)(t - kthreads), t->t_tid);
+		t->t_reap_cpu = cpu_id();
+		if (nreap[cpu_id()] < nkthread)
+			nreap[cpu_id()]++;
+		return;
+	}
 	t->t_used = 0;
+	t->t_oncpu = -1;
+	t->t_reap_cpu = -1;
 }
 
 /* 中文：阻塞当前内核线程，置为 KT_BLOCK 并切换回调度栈 */
@@ -445,7 +605,7 @@ kthread_poll(void)
 		return;
 	rq_dequeue(t);			/* running: off the queue */
 	curk = t;
-	t->t_lastcpu = 0;		/* single CPU in this port */
+	t->t_lastcpu = cpu_id();	/* S413: remember the host CPU */
 	kthread_switches++;
 	hal_switch_stack(&sched_esp, t->t_ksp);
 	curk = 0;
@@ -457,6 +617,20 @@ void
 kthread_run(void)
 {
 
+	/*
+	 * S413: kernel threads still run on CPU 0 only.
+	 *
+	 * kthread_poll() switches into a TCB with kswitch() through one global
+	 * scheduler stack (sched_esp); two CPUs doing that would share the
+	 * stack and the global curk.  The kernel-thread half therefore stays
+	 * pinned to the BSP until per-CPU scheduler stacks land (S414); user
+	 * threads are already dispatched on every CPU by proc_sched().
+	 * S413：内核线程仍然只在 CPU0 上跑。kthread_poll 通过全局 sched_esp
+	 * 用 kswitch 切栈，两个核同时做会共用栈和全局 curk。等 S414 做完每核
+	 * 调度栈再把内核线程放开；用户线程已经由 proc_sched 分发到所有核。
+	 */
+	if (cpu_id() != 0)
+		return;
 	while (kthread_runnable())
 		kthread_poll();
 }

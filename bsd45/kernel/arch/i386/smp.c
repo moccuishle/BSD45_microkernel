@@ -8,6 +8,8 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 
+#include <machine/pcb.h>	/* S413: struct i386tss for the per-CPU TSS */
+
 #include "sys/smp.h"
 #include "sys/platform.h"
 #include "thread/kthread.h"
@@ -61,6 +63,85 @@ extern int IdlePTD;
 
 /* 8 CPUs x 16 KB, in .bss (VA is valid in every page directory). */
 static unsigned char ap_stacks[MAXCPU][16384] __attribute__((aligned(16)));
+
+/*
+ * S413: one TSS per CPU.
+ *
+ * CPU 0's TSS has always lived at the start of proc0's u-area (that is what
+ * the GPROC0_SEL descriptor points at, and what init386 fills in), so it is
+ * registered here rather than duplicated.  An AP gets its own TSS in this
+ * file, installed into GDT slot GPROC0_SEL + id before its first ltr.  The
+ * hardware requires every CPU to have a TSS because that is where esp0 for
+ * ring-3 -> ring-0 transitions comes from; sharing one TSS between CPUs means
+ * an AP's syscall lands on the BSP's kernel stack.
+ * S413：每个 CPU 一个 TSS。CPU0 的 TSS 一直在 proc0 u 区的开头（GPROC0_SEL
+ * 描述符指向那里，init386 填的就是它），所以这里只登记不复制；AP 用自己的
+ * TSS，在第一次 ltr 之前装进 GDT 的 GPROC0_SEL+id 槽。硬件要求每个 CPU 都有
+ * TSS——ring3 进 ring0 的 esp0 就来自它；多核共用一个 TSS 会让 AP 的系统调用
+ * 落在 BSP 的内核栈上。
+ */
+static struct i386tss	ap_tss[MAXCPU] __attribute__((aligned(16)));
+static struct i386tss	*tss_slot[MAXCPU];
+
+extern struct user *proc0paddr;
+extern void smp_gdt_set_tss(int id, struct i386tss *t);
+
+struct i386tss *
+cpu_tss(int id)
+{
+
+	if (id < 0 || id >= MAXCPU)
+		return (0);
+	if (tss_slot[id] == 0 && id == 0 && proc0paddr != 0) {
+		/*
+		 * pcb (and pcb_tss, its first member) starts at offset 0 of
+		 * struct user, which is why GPROC0_SEL's descriptor base is
+		 * kstack.  Registered lazily so it works no matter whether
+		 * SMP was enabled at boot.
+		 */
+		tss_slot[0] = (struct i386tss *)proc0paddr;
+	}
+	return (tss_slot[id]);
+}
+
+unsigned
+cpu_tss_sel(int id)
+{
+
+	if (id < 0 || id >= MAXCPU)
+		id = 0;
+	return (((unsigned)(CPU_TSS_SEL_BASE + id)) << 3);
+}
+
+/*
+ * EN: Give CPU `id` its own TSS pointing at `stack_top` and make the CPU load
+ * it.  Called from ap_start() after the kernel GDT is in place.
+ */
+int
+cpu_tss_install(int id, unsigned stack_top)
+{
+	struct i386tss *t;
+	unsigned sel;
+
+	if (id <= 0 || id >= MAXCPU)
+		return (-1);
+	t = &ap_tss[id];
+	{
+		char *p = (char *)t;
+		int n = (int)sizeof(*t);
+
+		while (n-- > 0)
+			*p++ = 0;
+	}
+	t->tss_ss0 = 0x10;			/* kernel data selector */
+	t->tss_esp0 = (int)stack_top;
+	tss_slot[id] = t;
+
+	smp_gdt_set_tss(id, t);
+	sel = cpu_tss_sel(id);
+	__asm __volatile("ltr %0" : : "r" ((unsigned short)sel));
+	return (0);
+}
 
 extern unsigned vfs_page_alloc(void);
 
@@ -328,12 +409,31 @@ lapic_id(void)
 	return (lapic_read(LAPIC_ID) >> 24);
 }
 
-/* EN: Send an inter-processor interrupt (IPI) to a target APIC ID. */
+/* EN: Map a hardware APIC id back to our CPU index (-1 when not online). */
+int
+smp_cpu_by_apicid(unsigned apicid)
+{
+	int i;
+
+	for (i = 0; i < MAXCPU; i++)
+		if (cpus[i].ci_active && cpus[i].ci_apicid == apicid)
+			return (i);
+	return (-1);
+}
+
+/*
+ * EN: Send a fixed-delivery IPI to CPU `target` (an index into cpus[], not a
+ * hardware APIC id - the two only coincide while the firmware numbers the
+ * CPUs 0..n-1, which is the case on QEMU/VMware but is not guaranteed).
+ */
 void
 lapic_send_ipi(int target, int vector)
 {
+	unsigned apic;
 
-	lapic_write(LAPIC_ICR_HI, (unsigned)(target << 24));
+	apic = (target >= 0 && target < MAXCPU) ? cpus[target].ci_apicid :
+	    (unsigned)target;
+	lapic_write(LAPIC_ICR_HI, (unsigned)(apic << 24));
 	/* Fixed delivery, edge triggered: the low byte is just the vector.
 	 * 0x500 is delivery mode 5 (INIT), which would reset the target. */
 	lapic_write(LAPIC_ICR_LO, (unsigned)vector);
@@ -357,12 +457,14 @@ ap_delay(void)
 		;
 }
 
-/* EN: Send INIT IPI to a target AP. */
+/* EN: Send INIT IPI to CPU index `target` (translated to its APIC id). */
 static void
 ap_send_init(int target)
 {
+	unsigned apic = (target >= 0 && target < MAXCPU) ?
+	    cpus[target].ci_apicid : (unsigned)target;
 
-	lapic_write(LAPIC_ICR_HI, (unsigned)(target << 24));
+	lapic_write(LAPIC_ICR_HI, (unsigned)(apic << 24));
 	lapic_write(LAPIC_ICR_LO, 0x500);	/* INIT, level-triggered */
 	ap_delay();
 	lapic_write(LAPIC_ICR_LO, 0);		/* de-assert */
@@ -374,8 +476,10 @@ static void
 ap_send_sipi(int target)
 {
 	int vec = CPU_TRAMPOLINE_PA >> 12;
+	unsigned apic = (target >= 0 && target < MAXCPU) ?
+	    cpus[target].ci_apicid : (unsigned)target;
 
-	lapic_write(LAPIC_ICR_HI, (unsigned)(target << 24));
+	lapic_write(LAPIC_ICR_HI, (unsigned)(apic << 24));
 	lapic_write(LAPIC_ICR_LO, 0x600 | vec);	/* SIPI */
 	ap_delay();
 }
@@ -604,12 +708,16 @@ mp_detect(void)
 void
 ap_start(int id)
 {
+	unsigned stack_top;
 
 	if (id <= 0 || id >= MAXCPU)
 		return;
+	stack_top = (unsigned)(ap_stacks[id] + sizeof(ap_stacks[id]));
+	stack_top &= ~15u;
 	cpus[id].ci_active = 1;
 	cpus[id].ci_curthread = 0;
 	cpus[id].ci_lapic = lapic_va;
+	cpus[id].ci_apicid = lapic_id();	/* S413: real id, not the index */
 	/*
 	 * The trampoline used a temporary GDT and the AP still has the
 	 * real-mode IDTR, so load the kernel's GDT (for future TSS/ring3)
@@ -617,9 +725,26 @@ ap_start(int id)
 	 */
 	lgdt(&r_gdt);
 	lidt(&r_idt);
+	/*
+	 * S413: the LDTR is per-CPU as well.  Every user-mode selector we
+	 * build (ring-3 code/data) indexes the LDT, so an AP that never loads
+	 * it dies on resume_user's `mov %edi,%ds` with vector 9 - the selector
+	 * has TI=1 while its LDTR is null.
+	 * S413：LDTR 也是每核的。我们构造的所有用户态选择子都指向 LDT，AP 不加载
+	 * 它的话，resume_user 里的 `mov %edi,%ds` 会因 TI=1 而 LDTR 为空触发 9 号
+	 * 异常。
+	 */
+	__asm __volatile("lldt %0" : : "r" ((unsigned short)0x18));	/* GLDT_SEL<<3 */
+	/*
+	 * S413: per-CPU TSS.  This must happen before any ring-3 entry can
+	 * happen on this CPU, because the TSS supplies the ring-0 stack.
+	 */
+	cpu_tss_install(id, stack_top);
 	lapic_init();
 	lapic_timer_init();
 	ncpu++;
+	/* S413: give this CPU its own scheduler state and let it dispatch. */
+	sched_percpu_init(id, stack_top);
 	/*
 	 * Do not printf() from an AP: the console has no cross-CPU lock and
 	 * interleaved characters corrupt the BSP's monitor output.  The BSP's
@@ -627,11 +752,9 @@ ap_start(int id)
 	 * 不从 AP 直接 printf：控制台没有跨核锁，字符会与 BSP 输出交错。
 	 */
 	__asm __volatile("sti");
-	__asm __volatile("sti");
-	for (;;) {
-		/* AP idle: drain its run queue, then halt until IPI */
+	ap_sched();		/* never returns */
+	for (;;)
 		__asm __volatile("hlt");
-	}
 }
 
 /* EN: Local APIC init: enable APIC via spurious vector register. */
@@ -691,7 +814,7 @@ smp_tlb_shootdown(unsigned va)
 	smp_tlb_flushes++;		/* local flush happened regardless of CPU count */
 	if (ncpu <= 1 || lapic_va == 0)
 		return;
-	me = (int)lapic_id();
+	me = cpu_id();			/* S413: TSS selector, not the APIC id */
 	for (i = 0; i < MAXCPU; i++) {
 		if (i == me || !cpus[i].ci_active)
 			continue;
@@ -710,13 +833,26 @@ smp_reschedule(void)
 
 	if (ncpu <= 1 || lapic_va == 0)
 		return;
-	me = (int)lapic_id();
+	me = cpu_id();
 	for (i = 0; i < MAXCPU; i++) {
 		if (i == me || !cpus[i].ci_active)
 			continue;
 		ipi_reschedules++;
 		lapic_send_ipi(i, IPI_RESCHEDULE);
 	}
+}
+
+/* EN: S413: wake one CPU (likely owner of a freshly runnable thread). */
+void
+smp_resched_cpu(int id)
+{
+
+	if (id < 0 || id >= MAXCPU || !cpus[id].ci_active)
+		return;
+	if (id == cpu_id() || lapic_va == 0)
+		return;
+	ipi_reschedules++;
+	lapic_send_ipi(id, IPI_RESCHEDULE);
 }
 
 /*
@@ -728,8 +864,10 @@ void
 smp_handle_ipi(int vector)
 {
 	unsigned cr3;
-	int me = (int)lapic_id();
+	int me = smp_cpu_by_apicid(lapic_id());
 
+	if (me < 0)
+		me = cpu_id();
 	if (me >= 0 && me < MAXCPU)
 		cpus[me].ci_ticks++;
 
@@ -739,12 +877,16 @@ smp_handle_ipi(int vector)
 		cpu_load_cr3(cr3);	/* flush all non-global TLB entries */
 		break;
 	case IPI_RESCHEDULE:
-		/* cooperative scheduler: a future tick will pick up the work;
-		 * the flag is recorded and no unsafe cross-CPU stack switch is
-		 * attempted here. */
+		/*
+		 * S413: another CPU made a thread runnable (or wants this CPU
+		 * to look again).  Set this CPU's reschedule flag; the flag is
+		 * consumed at the next safe point, never inside this handler -
+		 * switching stacks from an IPI frame would strand the frame.
+		 */
+		smp_need_resched();
 		break;
 	case IPI_STOP:
-		cpus[(lapic_id() < MAXCPU) ? lapic_id() : 0].ci_active = 0;
+		cpus[(me >= 0 && me < MAXCPU) ? me : 0].ci_active = 0;
 		break;
 	default:
 		break;
@@ -785,14 +927,27 @@ smp_print(void)
 	for (i = 0; i < MAXCPU; i++)
 		if (cpus[i].ci_active)
 			active++;
-	printf("smp: enabled=%d active=%d ncpu=%d lapic=%s\n",
-	    smp_enabled, active, ncpu, lapic_va ? "mapped" : "absent");
+	printf("smp: enabled=%d active=%d ncpu=%d maxcpu=%d lapic=%s\n",
+	    smp_enabled, active, ncpu, MAXCPU, lapic_va ? "mapped" : "absent");
 	printf("smp: ipi_tlb=%u ipi_resched=%u tlb_flushes=%u\n",
 	    ipi_tlb_shootdowns, ipi_reschedules, smp_tlb_flushes);
 	for (i = 0; i < MAXCPU; i++)
 		if (cpus[i].ci_active)
 			printf("smp: cpu%d apic %d active ticks %u\n", i,
 			    (int)cpus[i].ci_apicid, cpus[i].ci_ticks);
+	/*
+	 * S413: per-CPU scheduling view - switch counts plus the thread each
+	 * CPU is running right now.  Different non-negative tids on different
+	 * CPUs is the proof that user threads really run in parallel.
+	 */
+	for (i = 0; i < MAXCPU; i++)
+		if (cpus[i].ci_active) {
+			struct kthread *ct = (struct kthread *)cpus[i].ci_curthread;
+
+			printf("smp: sched cpu%d switches %u running tid %d\n",
+			    i, sched_cpu_switches(i),
+			    ct != 0 ? ct->t_tid : -1);
+		}
 }
 
 /*

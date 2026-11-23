@@ -68,6 +68,9 @@ extern vm_offset_t avail_end;
 #include <machine/cpu.h>
 #include <machine/reg.h>
 #include <machine/psl.h>
+
+/* S413: MAXCPU / CPU_TSS_SEL_BASE for the per-CPU GDT TSS slots. */
+#include "sys/smp.h"
 #include <machine/specialreg.h>
 #include <i386/isa/rtc.h>
 #include <i386/i386/cons.h>
@@ -721,9 +724,17 @@ cpu_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 #define	GTGATE_SEL	4	/* Process task switch gate */
 #define	GPANIC_SEL	5	/* Task state to consider panic from */
 #define	GPROC0_SEL	6	/* Task state process slot zero and up */
-#define NGDT 	GPROC0_SEL+1
+/*
+ * S413: one TSS per CPU.  CPU 0 keeps slot GPROC0_SEL (proc0's u-area, the
+ * TSS init386 has always used); AP n gets GPROC0_SEL + n, which is also the
+ * value smp.h's cpu_id() decodes back out of `str`.
+ * S413：每个 CPU 一个 TSS。CPU0 仍用 GPROC0_SEL（proc0 的 u 区，init386 一直
+ * 用的那个）；AP n 用 GPROC0_SEL+n，smp.h 的 cpu_id() 正是从 `str` 的这个选择子
+ * 反解出 CPU 号。
+ */
+#define	NGDT 	(GPROC0_SEL + MAXCPU)
 
-union descriptor gdt[GPROC0_SEL+1];
+union descriptor gdt[NGDT];
 
 /* interrupt descriptor table */
 struct gate_descriptor idt[256];
@@ -880,6 +891,39 @@ setidt(idx, func, typ, dpl) char *func; {
 	ip->gd_hioffset = ((int)func)>>16 ;
 }
 
+/*
+ * S413: install the TSS descriptor for CPU `id`.
+ *
+ * CPU 0 keeps the descriptor init386 built over proc0's u-area; an AP calls
+ * this once, before its first ltr, with its own TSS.  The descriptor has to
+ * live in the GDT the AP has already loaded (r_gdt covers NGDT slots), so
+ * installing it after lgdt() is enough - the GDT itself is shared.
+ * S413：为 CPU id 安装 TSS 描述符。CPU0 沿用 init386 基于 proc0 u 区建好的
+ * 那个；AP 在第一次 ltr 前调用本函数填自己的 TSS。AP 此时已加载 r_gdt
+ * （覆盖 NGDT 个槽），所以安装后立刻可用——GDT 本身是全核共享的。
+ */
+void
+smp_gdt_set_tss(int id, struct i386tss *t)
+{
+	struct soft_segment_descriptor ssd;
+	char *p = (char *)&ssd;
+	int i;
+	extern ssdtosd();
+
+	if (id < 0 || id >= MAXCPU || t == 0)
+		return;
+	for (i = 0; i < (int)sizeof(ssd); i++)
+		p[i] = 0;
+	ssd.ssd_base = (unsigned)t;
+	ssd.ssd_limit = sizeof(struct i386tss) - 1;
+	ssd.ssd_type = SDT_SYS386TSS;
+	ssd.ssd_dpl = SEL_KPL;
+	ssd.ssd_p = 1;
+	ssd.ssd_def32 = 0;		/* TSS is a 16-bit "segment" */
+	ssd.ssd_gran = 0;
+	ssdtosd(&ssd, &gdt[GPROC0_SEL + id]);
+}
+
 #define	IDTVEC(name)	__CONCAT(X, name)
 extern	IDTVEC(div), IDTVEC(dbg), IDTVEC(nmi), IDTVEC(bpt), IDTVEC(ofl),
 	IDTVEC(bnd), IDTVEC(ill), IDTVEC(dna), IDTVEC(dble), IDTVEC(fpusegm),
@@ -914,7 +958,23 @@ init386(first) { extern ssdtosd(), lgdt(), lidt(), lldt(), etext;
 
 	/* make gdt memory segments */
 	gdt_segs[GCODE_SEL].ssd_limit = btoc((int) &etext + NBPG);
-	for (x=0; x < NGDT; x++) ssdtosd(gdt_segs+x, gdt+x);
+	for (x=0; x <= GPROC0_SEL; x++) ssdtosd(gdt_segs+x, gdt+x);
+	/*
+	 * S413: the per-CPU TSS slots (GPROC0_SEL+1 .. NGDT-1) start out
+	 * not-present.  cpu_tss_install() fills one in when an AP loads its
+	 * own TSS; leaving them valid-but-empty would let a stray ltr pick up
+	 * a TSS whose base is 0.
+	 * S413：AP 的 TSS 槽位（GPROC0_SEL+1..NGDT-1）先置为 not-present，
+	 * 等 cpu_tss_install() 在 AP 加载自己的 TSS 时再填；否则一次误 ltr 会
+	 * 选中基址为 0 的 TSS。
+	 */
+	{
+		char *p = (char *)&gdt[GPROC0_SEL + 1];
+		int n = (int)sizeof(union descriptor) * (NGDT - GPROC0_SEL - 1);
+
+		while (n-- > 0)
+			*p++ = 0;
+	}
 	/* make ldt memory segments */
 	ldt_segs[LUCODE_SEL].ssd_limit = btoc(UPT_MIN_ADDRESS);
 	ldt_segs[LUDATA_SEL].ssd_limit = btoc(UPT_MIN_ADDRESS);

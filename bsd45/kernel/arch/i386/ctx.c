@@ -17,6 +17,7 @@
 
 #include "arch/i386/io.h"
 #include "sys/platform.h"
+#include "sys/smp.h"
 #include "thread/kthread.h"
 
 /*
@@ -38,14 +39,17 @@ void	hal_syscall_gate_init(void);
 extern struct user *proc0paddr;
 extern void syscall_entry(void);
 
-/* 中文：设置持久化内核栈的栈顶，将其写入 proc0 的 TSS esp0 字段供陷入内核时使用 */
-/* EN: Set the persistent kernel stack top by writing it into proc0's TSS esp0 field for kernel-entry use */
+/* 中文：设置本 CPU 的 ring0 栈顶。S413 起每个 CPU 有自己的 TSS，写错 TSS 会让
+ * 另一个核的开中断/系统调用落到本核正在用的栈上。
+ * EN: Set this CPU's ring-0 stack top.  Since S413 every CPU owns a TSS; the
+ * old single proc0 TSS meant an AP's syscall would land on the BSP's stack. */
 void
 hal_kernel_stack_set(unsigned top)
 {
+	struct i386tss *t = cpu_tss(cpu_id());
 
-	if (proc0paddr != 0)
-		proc0paddr->u_pcb.pcb_tss.tss_esp0 = (int)top;
+	if (t != 0)
+		t->tss_esp0 = (int)top;
 }
 
 /* 中文：通过 kswitch 汇编例程把当前栈指针切换到给定的新栈，old_sp 用于保存原栈指针 */

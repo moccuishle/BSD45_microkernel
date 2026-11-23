@@ -124,64 +124,181 @@ smp: cpu1 apic 1 active ticks 1
 
 ---
 
-## 5. 当前调度模型（重要）
+## 5. 当前调度模型（S413 已接管）
 
-- **AP 目前只跑内核 idle loop**（`hlt`），不参与 `proc_sched()`。
-- BSP 仍是唯一调度器：用户进程、用户线程、softirq/aio 内核线程都还在
-  CPU0 上按原 KLT 1:1 模型调度。
-- 因此现在具备的是：
-  - 动态拓扑（含 SMT）；
-  - 多核 AP 上线、每 CPU 独立 LAPIC/页目录/IDT；
-  - 跨核 IPI/TLB shootdown 通路；
-  - 每 CPU 运行统计。
-- **尚未具备**：用户进程/线程真正并行跑在多个 CPU 上。
+S413 把「每核执行上下文 / 每核 TSS / TCB 归属 / AP 进调度 / 锁与 IPI」
+做完了，S412 列的 1–5 步已经落地，第 6 步（SMT 亲和性）留到 S414。
 
-### 5.1 为什么还没直接开（不是漏做）
+| 能力 | 状态 |
+|---|---|
+| 动态拓扑（CPUID，含 SMT/HTT），上限 `MAXCPU=16` | ✅ |
+| AP 上线：每 CPU 独立 LAPIC / 页目录 / 页表 / IDT / **TSS** | ✅ |
+| 每 CPU 调度状态（`cur` / `cur_thread` / `cur_pd` / `need_resched`） | ✅ |
+| TCB 归属 `t_oncpu`（原子 claim/release），一 TCB 只在一个核上跑 | ✅ |
+| AP 调 `proc_sched()`，用户进程/线程可跑在任意核 | ✅（默认关闭，见 §5.2） |
+| 大内核锁（BKL）+ 进程表/TCB 池/控制台锁、IPC 唤醒 IPI | ✅ |
+| SMT 亲和性（同进程线程分散到不同物理核） | ⬜ S414 |
 
-现有调度器是单核全局态：
+### 5.1 现在的执行模型
 
-- `cur` / `cur_thread` / `cur_pd`（usermode.c）和 `curk` / `sched_esp`
-  （kthread.c）都是全局变量；
-- GDT 只有 **一个** TSS 槽（`GPROC0_SEL`），`hal_kernel_stack_set()` 写的是
-  `proc0paddr->u_pcb.pcb_tss`；
-- `fair_pick_next()` 没有「TCB 正在哪个 CPU 上跑」的概念，两个 CPU 同时
-  `proc_sched()` 会把同一个 TCB 选中两次；
-- proc 表/fd/管道/IPC 没有跨 CPU 锁。
+```
+用户态：所有核并行，互不加锁
+   │  系统调用 / 缺页
+   ▼
+内核态：smp_bkl_enter()  ── 一把大内核锁串行化内核
+   │  阻塞 / 返回用户态前 smp_bkl_drop()
+   ▼
+调度器：每个核独立扫描 kthreads[]，用 cmpxchg 认领没人占的 TCB
+```
 
-直接让 AP 调 `proc_sched()` 会随机踩栈、双跑 TCB、TSS esp0 串台。
+- **A/B 两把开关**：`smpon` 把 AP 拉起来（TSS、调度状态、IPI 全就绪）；
+  `smpuser` 再决定 AP 是否参与用户线程调度。默认 `smpuser` 关，系统行为
+  与单核版完全一致，只是多出 3 个在 `hlt` 里待命的核。
+- **BKL 契约**：`smp_bkl_enter()` 在系统调用和用户缺页入口；
+  `smp_bkl_exit()` 回用户态时；`smp_bkl_drop()` 在**任何要切走的路径**上——
+  包括「没活干去 idle」那条，否则持锁 `hlt` 会把其它核全部卡死（S413 第一版
+  就死在这里）。
+- **归属规则**：一个 TCB 只能被它的 owner 核 `resume_user()`。这样它的
+  16 KB 内核栈永远不会被两个核同时使用；跨核迁移只在它阻塞且 owner 核
+  重新扫描时发生。
+- **延迟回收**：线程在自己栈上退出时把自己的 TCB 槽位交出来，但槽位要等
+  本核换到别的栈上才发布（`kthread_reap`），否则另一个核的 fork 会立刻
+  拿到同一张栈。
+
+### 5.2 已知问题（必须写明）
+
+`smpon` + `smpuser` 打开后，**部分负载仍会崩**，典型复现是：
+
+```
+# ls /bin      ← 子进程在 AP 上跑完并退出
+# （回到提示符）
+*** kernel TRAP 12 (stack fault) err=0 cpu=0
+eip=fe116d50 cs=8 esp=fef001e0
+eax=6c6000 ebx=fef2cf10 esi=300 edi=fb000000
+cr2=6c6000
+```
+
+- 崩点在 `proc_sched()` 里读 `mt->t_state`，而 `mt` 变成了一个页目录地址
+  （`0x6c6000`），`esp` 落在 TCB 池（`0xFEF001E0`）——即 BSP 在一次
+  `kthread_run()` 的栈切换后跑在了错误的内核栈上。
+- 只在「一个进程在 AP 上退出 + 后续再 fork/exec」之后出现；单独跑
+  `ls`、`cat`、`ps`、`echo`、`proctest`（1000 子进程）都通过过。
+- 已排除：`cpu_id()` 位宽问题（已改成显式掩码）、TCB 槽位复用（已加延迟
+  回收并验证 `alloc slot` 不再撞车）、内核栈溢出（已加 `KSTACK_CANARY`
+  金丝雀，未触发）。
+- 剩余怀疑方向：`kthread_poll()` 的全局 `sched_esp` 与 `t_ksp` 在
+  「用户线程退出恰好发生在 BSP 跑内核线程的窗口」时被写坏；以及
+  `cd_map()` 的全局 4 MB 窗口 / 页缓存回收与另一核的读路径没有互斥。
+
+所以默认 `smp_user_dispatch = 0`。要演示多核用户调度：
+
+```
+bsd45> smpon       # 4 CPU(s) online
+bsd45> smpuser     # AP user dispatch on
+bsd45> shell
+```
+
+S414 的第一件事就是把上面那条 TRAP 12 收掉（方向：把内核线程也改成
+「每核调度栈」而不是全局 `sched_esp`）。
 
 ---
 
-## 6. 下一阶段（多核调度接管）
+## 6. S413 实现细节
 
-按依赖顺序：
+### 6.1 每 CPU 身份：用 TSS 选择子，不用全局变量
 
-1. **per-CPU 执行上下文**
-   - `struct cpu_info` 增加 `ci_curproc / ci_curthread / ci_curpd / ci_curk /
-     ci_sched_esp / ci_tss`；
-   - 用 GS base（MSR 0xC0000101）指向 `cpus[cpuid]`，`smp_cpu_index()`
-     从 `%gs:0` 取当前 CPU，避免每次读 LAPIC MMIO。
-2. **per-CPU TSS**
-   - GDT 扩到 `GPROC0_SEL + MAXCPU`，每个 CPU 一个 TSS 描述符；
-   - BSP 用 0x30，AP n 用 `(6+n)*8`，各自 `ltr`；
-   - `hal_kernel_stack_set()` 写当前 CPU 的 TSS。
-3. **TCB 抢占标记**
-   - `struct kthread` 增加 `t_oncpu`（0=空闲，1..MAXCPU=正在该 CPU 运行）；
-   - `fair_pick_next()` 跳过 `t_oncpu != 0`；
-   - 派发/阻塞/退出在 `sched_lock` 下改 `t_oncpu`。
-4. **AP 进入调度**
-   - AP idle 循环调用 `proc_sched()`，没有可运行 TCB 时 `hlt`；
-   - `kthread_block/exit` 切回**当前 CPU** 的 `sched_esp`，不再回 BSP。
-5. **锁与 IPI**
-   - proc 表、fd 表、pipe、IPC 端口加自旋锁；
-   - pmap 改动调用 `smp_tlb_shootdown()`；唤醒远端 CPU 上的 TCB 用
-     `IPI_RESCHEDULE`。
-6. **SMT 亲和性**
-   - 用 `cpu_smt` / 拓扑 leaf 计算 sibling 对；
-   - 同进程线程优先分散到不同物理核，SMT 兄弟只作第二选择。
+SMP 内核不能有「当前 CPU 号」这种全局变量。这里用任务寄存器：
 
-完成 1–5 后，`proctest` / `pthread` 才能做「多进程 × 多线程 × 多核」的
-并行验收；第 6 步是性能优化，不影响正确性。
+```c
+static __inline int cpu_id(void) {
+        unsigned sel = 0;
+        __asm __volatile("str %0" : "=r" (sel));
+        sel &= 0xffffu;                 /* str 只写 16 位，必须显式掩码 */
+        sel >>= 3;
+        if (sel < CPU_TSS_SEL_BASE || sel >= CPU_TSS_SEL_BASE + MAXCPU)
+                return (0);
+        return ((int)(sel - CPU_TSS_SEL_BASE));
+}
+```
+
+- GDT 里 CPU0 的 TSS 在 6 号槽，CPU n 在 `6+n`；`str` 读回的选择子就是
+  CPU 号，不需要读 LAPIC MMIO，也不需要 GS base。
+- **踩过的坑**：`str %0` 用 `unsigned short` 接收时，GCC 选中的 32 位寄存器
+  高 16 位是未定义的；不掩码会偶发算出垃圾 CPU 号，于是 AP 把
+  `hal_kernel_stack_set()` 写进了 **BSP 的 TSS**，两核共用一张内核栈。
+
+### 6.2 每 CPU TSS
+
+- `GPROC0_SEL = 6`，`NGDT = GPROC0_SEL + MAXCPU`（16 核 → 22 项）。
+- CPU0 沿用 `proc0` u 区里的 TSS（`pcb_tss` 在 `struct user` 偏移 0，所以
+  描述符 base 就是 `kstack`）；
+- AP n 用 `ap_tss[n]`，`smp_gdt_set_tss()` 填描述符后 `ltr((6+n)<<3)`；
+- `hal_kernel_stack_set()` 改成写**当前 CPU** 的 TSS esp0：
+  这是 ring3→ring0 唯一的内核栈来源，写错就是两核共栈。
+
+### 6.3 TCB 归属：`t_oncpu`
+
+```c
+int  kthread_claim_cpu(struct kthread *t, int id);   /* cmpxchg(-1 -> id) */
+void kthread_release_cpu(struct kthread *t);         /* xchg(-1) */
+```
+
+- `-1` = 无人占用（新 fork 出来的线程都是），`0..MAXCPU-1` = owner。
+- 调度器扫描时 `kthread_owned_by_other(t, cid)` 直接跳过；
+  认领失败也跳过。**一句判断就把一个共享扫描变成 N 个独立分发器**：
+  所有核走同一张 TCB 表，但只能领没人占的，于是自然分摊。
+- 释放点只有三处：显式放弃（本核扫描到 blocked 且 owner 是自己）、
+  退出、以及 kernel thread 退出。
+
+### 6.4 每 CPU 调度状态
+
+`usermode.c` 里 `cur` / `cur_thread` / `cur_pd` / `need_resched` 原来是四个
+全局变量，现在是一个数组 + 宏：
+
+```c
+struct sched_cpu { struct proc *sc_cur; struct kthread *sc_curthread;
+                   unsigned sc_cur_pd; int sc_need_resched;
+                   struct kthread *sc_idle; int sc_online; unsigned sc_switches; };
+static struct sched_cpu sched_cpu[MAXCPU];
+#define cur          (sched_cpu[cpu_id()].sc_cur)
+#define cur_thread   (sched_cpu[cpu_id()].sc_curthread)
+#define cur_pd       (sched_cpu[cpu_id()].sc_cur_pd)
+#define need_resched (sched_cpu[cpu_id()].sc_need_resched)
+```
+
+上面 397 处 `cur` 引用一行都不用改。`timer.c` 看不到宏，改为调用
+`smp_need_resched()`。
+
+### 6.5 AP 进调度
+
+- `sched_percpu_init(id, stack_top)`：给 AP 一个**池外**的 idle 载体 TCB
+  （`per_cpu_idle[id]`，不在 `kthreads[]` 里，别的核永远选不中），
+  `sc_curthread` 指向它，esp0 指向 AP 启动栈。
+- `ap_sched()` → `proc_sched()`：同一个循环，`me == 0` 时跳过「回落自己」。
+- 没活干时：`smp_enabled` 为真就 `sti; hlt` 留在循环里（IPI/tick 叫醒），
+  不再像单核那样打印 `[no runnable process]` 后永远停机。
+
+### 6.6 锁
+
+| 锁 | 位置 | 保护对象 |
+|---|---|---|
+| `smp_bkl_lock` | `usermode.c` | 整个内核态（系统调用 + 用户缺页） |
+| `proc_table_lock` | `usermode.c` | `procs[]` 槽位分配（`P_ALLOC` 占位） |
+| `kthread_alloc_lock` | `kthread.c` | TCB 槽位分配（初始化完成才放锁） |
+| `console_lock` | `glue.c` | `printf` 整行输出 |
+
+`next_pid` 用 `atomic_add()`（`lock xadd`），`t_oncpu` 用
+`atomic_cmpxchg()`。**不能用 `__sync_*`**：这个 `-march=i386` 目标会把它们
+展开成 libatomic 调用，内核不链接，链接期报
+`undefined reference to __sync_fetch_and_add_4`。
+
+### 6.7 唤醒 IPI
+
+- `proc_wake()`：被唤醒线程有 owner → `smp_resched_cpu(owner)`。
+- fork/vfork 发布子线程后 `sched_kick_other()` 轮转踢一个 AP，
+  否则空闲 AP 要等下一个时钟才看见新线程。
+- `smp_handle_ipi(IPI_RESCHEDULE)` 只置本核 `need_resched`，**不在 IPI
+  帧里切栈**。
 
 ---
 
@@ -193,8 +310,13 @@ smp: cpu1 apic 1 active ticks 1
 | AP 实模式 trampoline（raw 0x7000） | `kernel/arch/i386/ap_tramp.s` |
 | IPI 中断 stub | `kernel/arch/i386/smp_ipi.s` |
 | 构建嵌入 | `build_kernel.ps1`、`build_kernel.sh` |
-| monitor 命令 | `kernel/sys/mon.c`（`cpuinfo` / `smpon` / `smpping` / `smpinfo`） |
-| VMware 2 核测试机 | `vms/BSD45-SMP.vmx` |
+| monitor 命令 | `kernel/sys/mon.c`（`cpuinfo` / `smpon` / `smpuser` / `smpping` / `smpinfo`） |
+| VMware 测试机 | `vms/BSD45-SMP.vmx`（4 vCPU / 2GB）、`vms/BSD45-SMP8.vmx`（8 vCPU / 3GB） |
+| 无窗口发按键 | `tools/vmkeys.py`（Python + user32，支持 `/ - .` 等符号） |
+| 每 CPU TSS | `kernel/arch/i386/isa/machdep.c`（`smp_gdt_set_tss`） |
+| 每 CPU esp0 | `kernel/arch/i386/ctx.c`（`hal_kernel_stack_set`） |
+| 每 CPU 调度状态 / BKL | `kernel/sys/usermode.c` |
+| TCB 归属 / 延迟回收 / 栈金丝雀 | `kernel/thread/kthread.c` |
 
 ---
 
@@ -209,11 +331,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_all.ps1
 monitor 里：
 
 ```
-cpuinfo     # 拓扑：vendor / logical / cores / smt / htt / apic id
-smpon       # 映射 LAPIC、建 AP 页目录、INIT-SIPI-SIPI、AP 上线
+cpuinfo     # 拓扑：vendor / logical / cores / smt / htt / apic id / maxcpu
+smpon       # 映射 LAPIC、建 AP 页目录、INIT-SIPI-SIPI、AP 上线（AP 只 idle）
+smpuser     # 切换：AP 是否参与用户线程调度（默认 off）
 smpping     # 向所有 AP 发 reschedule IPI
-smpinfo     # active/ncpu、IPI 计数、每 CPU ticks
+smpinfo     # active/ncpu/maxcpu、IPI 计数、每 CPU ticks + 每 CPU 调度统计
 ```
+
+`smpinfo` 新增每核一行：
+
+```
+smp: sched cpu0 switches 12 running tid 3
+smp: sched cpu1 switches 4 running tid 5
+```
+
+`switches` 不同、`running tid` 不同，就是「用户线程真的并行跑在多个核上」
+的证据；全部集中在 cpu0 说明 AP 没参与（`smpuser` 关着）。
 
 ---
 
@@ -232,3 +365,77 @@ smpinfo     # active/ncpu、IPI 计数、每 CPU ticks
 7. **AP 必须 `lidt(r_idt)`**：否则 IPI 没有门，直接 triple fault/丢失。
 8. **不要从 AP 直接 printf**：控制台没有跨核锁，输出会交错；AP 上线由
    BSP 的 `smpon: N CPU(s) online` 汇总。
+
+---
+
+## 10. S413 实测（VMware，4 逻辑 CPU / 3 GB）
+
+### 10.1 拓扑与 AP 上线
+
+```
+bsd45> cpuinfo
+cpu: vendor AuthenticAMD family 25 model 1 step 2
+cpu: logical 4, cores 4, smt 1, htt 1
+cpu: apic id 0, maxcpu 16
+
+bsd45> smpon
+smp: MP table absent, CPUID logical 4 cores 4 smt 1 htt 1
+smp: enabling, 4 CPU(s) detected, lapic mapped
+smp: AP page dir 689000 (low PT 68a000), tramp win feb00000
+smp: AP trampoline 792 bytes at 7000, pd 689000
+smp: starting 3 AP(s) via INIT/SIPI
+smpon: 4 CPU(s) online
+```
+
+VMware 对 32 位 guest 只暴露 4 个逻辑 CPU（`numvcpus=8` 也报 logical 4），
+代码以 CPUID 为准；`MAXCPU=16` 只是编译期上限，核数仍由 CPUID 决定，
+所以同一份二进制在 2/4/6/8/12/16 核机器上都能直接用。
+
+### 10.2 单核等价性（默认，`smpuser` 关）
+
+`smpon` → `smpinfo` → `shell` → `ls /bin` → `cat /readme.txt` → `ps` →
+`exit 0` 全流程无 TRAP，输出与单核版一致。AP 在 `hlt` 里待命，
+`smpping` 能唤醒它们（`cpu1 ticks` 增加）。
+
+### 10.3 多核用户调度（`smpuser` 开）
+
+```
+# ls /bin
+smp: cpu3 dispatch tid 2 pid 2 pd 6f3000 eip 80480a7
+execve /bin/ls: entry 8048000 ...
+aiotest.elf ... wc.elf                ← 子进程完整跑在 CPU3 上
+# ps
+smp: cpu1 dispatch tid 3 pid 3
+PID PPID PGRP STAT COMM
+1 0 1 BLOCK sh
+3 1 3 RUN ps                          ← ps 自己跑在 CPU1 上
+```
+
+- `ls`、`cat`、`ps`、`echo`、`uname` 能在 AP 上完整跑完并正确输出；
+- `proctest`（1000 个同时存活子进程，`/dev/ps` 列出 1002 条）在 4 核下跑完，
+  期间 TCB 槽位在 768 个上限内反复复用；
+- 之后仍有 §5.2 描述的 TRAP 12，所以默认不开。
+
+### 10.4 S413 踩坑记录
+
+1. **`str` 的 16 位输出必须掩码**。`unsigned short sel; asm("str %0")` 让 GCC
+   选中一个 32 位寄存器，高半未定义。不掩码时 AP 偶尔得到垃圾 CPU 号，
+   `hal_kernel_stack_set()` 写进 BSP 的 TSS，两核共用一张内核栈，
+   表现为 `cat` 输出到一半 TRAP 12、帧里全是用户地址。
+2. **BKL 必须在所有离开内核的路径上释放**，包括「没活干 → `hlt`」。
+   只在 `resume_user()` 之前放锁，会让 BSP 持锁 `hlt`，AP 永远卡在
+   `smp_bkl_enter()` 里（第一版 SMP 就死在这里，表现为 `ls` 无输出）。
+3. **新 TCB 不能先置 `KT_RUN` 再填上下文**。`kthread_user_spawn()` 里
+   `t_state = KT_RUN` 之后调用者才写 `t_regs`/`uk_regs`，另一个核能在窗口里
+   派发它并 `iret` 到 eip=0。改成创建时 `KT_BLOCK`，上下文填完再发布。
+4. **释放 TCB 槽位要延迟**。线程在自己栈上退出时释放自己的槽位，另一个核
+   立刻 fork 会拿到同一张栈。`kthread_reap()` 等本核换栈后再发布。
+5. **不要误释放别人的 claim**。扫描到「已阻塞」线程时无条件
+   `kthread_release_cpu()` 会把 owner 核的占位撤掉，导致 shell 被 AP 抢走。
+   只有 `t_oncpu == cid` 才能释放。
+6. **`__sync_*` 在 `-march=i386` 下要 libatomic**。用内联汇编
+   `lock cmpxchgl` / `lock xaddl` / `xchgl` 代替。
+7. **AP 也要 `lldt`**。用户态选择子都在 LDT 里，AP 不加载 LDTR，
+   `resume_user` 的 `mov %edi,%ds`（选择子 0x1b/0x23）直接 9 号异常。
+8. **控制台要加锁**。两个核同时 `printf` 会把一行撕成交错字符，
+   trap dump 会变得不可读；`printf`/`kprintf` 现在整行持 `console_lock`。

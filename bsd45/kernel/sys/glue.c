@@ -34,6 +34,7 @@
 #include "ffs/ffs.h"
 #include "jlfs/jlfs.h"
 #include "vfs.h"
+#include "sys/smp.h"		/* S413: console lock, cpu_id() in trap dumps */
 #include "lib/kstr.h"
 #include "sys/platform.h"
 #include "sys/smp.h"
@@ -179,14 +180,26 @@ vprintf(const char *fmt, va_list ap)
 
 /* 中文：可变参数格式化输出到控制台，封装 vprintf */
 /* EN: Variadic formatted output to the console, wrapping vprintf */
+/* S413: serialises whole lines from different CPUs onto the UART. */
+static struct spinlock	console_lock;
+
 void
 printf(const char *fmt, ...)
 {
 	va_list ap;
 
+	/*
+	 * S413: one line at a time.  With more than one CPU running user
+	 * threads, two printf() calls can reach the UART at once and the
+	 * characters interleave into unreadable text - a trap dump from an AP
+	 * mixed with monitor output from the BSP.  The lock is a plain
+	 * spinlock, so it is safe in interrupt context too.
+	 */
+	spin_lock(&console_lock);
 	va_start(ap, fmt);
 	vprintf(fmt, ap);
 	va_end(ap);
+	spin_unlock(&console_lock);
 }
 
 /* 中文：内核 printf 别名，与 printf 同样经 vprintf 格式化输出 */
@@ -196,9 +209,11 @@ kprintf(const char *fmt, ...)
 {
 	va_list ap;
 
+	spin_lock(&console_lock);
 	va_start(ap, fmt);
 	vprintf(fmt, ap);
 	va_end(ap);
+	spin_unlock(&console_lock);
 }
 
 /* 中文：内核致命错误处理：打印 panic 前缀与消息后进入无限循环停机 */
@@ -277,9 +292,9 @@ trap(struct trapframe *frame)
 		}
 		user_fault(sig, frame->tf_eip, va);
 	}
-	printf("\n\n*** kernel TRAP %d (%s) err=%x\n", frame->tf_trapno,
+	printf("\n\n*** kernel TRAP %d (%s) err=%x cpu=%d\n", frame->tf_trapno,
 	    frame->tf_trapno < 16 ? trapname[frame->tf_trapno] : "unknown",
-	    frame->tf_err);
+	    frame->tf_err, cpu_id());
 	printf("eip=%x cs=%x eflags=%x esp=%x ss=%x\n",
 	    frame->tf_eip, frame->tf_cs, frame->tf_eflags,
 	    frame->tf_esp, frame->tf_ss);

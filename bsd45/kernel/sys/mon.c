@@ -378,6 +378,7 @@ monitor(void)
 			    "usermode  shell  test  cd  reboot  halt\n"
 			    			    "      kthread  softirq  kthreadtest  softirqtest\n"
 			    "      schedtest  synctest  smpinfo  cpuinfo  smpping  ipitest\n"
+			    "      smpon  smpuser  memplan\n"
 			    "      ipctest  ipcinfo\n"
 			    "      clock  lat  cow\n"
 			    "      zcomp  zcomptest\n"
@@ -407,6 +408,16 @@ monitor(void)
 		}
 		else if (!strcmp(line, "smpinfo"))
 			smp_print();
+		else if (!strcmp(line, "smpuser")) {
+			/*
+			 * S413: toggle AP user-thread dispatch.  `smpon` alone
+			 * brings the APs up; this decides whether they also
+			 * schedule user processes.
+			 */
+			smp_user_dispatch = !smp_user_dispatch;
+			printf("smpuser: AP user dispatch %s\n",
+			    smp_user_dispatch ? "on" : "off (BSP only)");
+		}
 		else if (!strcmp(line, "cpuinfo"))
 			cpuinfo_print();
 		else if (!strcmp(line, "smpping")) {
