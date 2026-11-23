@@ -245,3 +245,80 @@ ALL SUITES PASSED
 当前 O(1) TCB 标量继承更合适。**先不加，等引入可睡眠锁 + 锁嵌套再说。**
 
 相关讨论：`os_sched.md` 问题三（继承不能 +1）、问题五（四道防线）。
+
+---
+
+## 6. 2026-11-24 更新：当前状态与未完成任务清单
+
+> 本节在全项目重命名重构之后追加，记录**截至目前仍未完成 / 仍待验证**的事项。
+> 已完成的历史（S411–S421、重命名）细节见 `os_smp.md` 与
+> `.workbuddy/memory/2026-11-{23,24}.md`；本文件 0.x 节是 S17 时代状态，
+> 与 SMP 相关的内容以本节为准。
+
+### 6.0 仓库与构建现状（2026-11-24）
+
+- 本地 HEAD / origin / net / device / core：`f723166`
+  （`Rename proc.h to kprocess.h and struct proc to struct process`）。
+- micro：独立历史线 `d2a613a`（内容树与上面一致，用 `commit-tree` 同步）。
+- 工作区干净。内核 + 用户态全编译通过；VMware 8vCPU 冒烟
+  `smpon` + `smpuser` + shell + ls + ps，TRAP=0。
+- 全项目重命名已完成：`proc.h` → `kprocess.h`（6 个头文件），
+  `struct proc` → `struct process`（909 处 / 151 文件）；
+  `struct procstat/proclist/prochd` 与 `sys/kproc.h` 保持不变。
+
+### 6.1 SMP / TRAP 12（判定收敛，但未彻底收口）— 最高优先
+
+1. **`smp_user_dispatch` 仍默认 0**。user fault 已清零、BSP TRAP 12 判定收敛
+   （S421 后累计 16 轮加压 0 复现，见 `os_smp.md` §15.6），但故障曾为极低频
+   偶发。默认打开前需做**长时间 soak**（建议数小时混合负载），确认不再复现后
+   再把默认值改为 1。手动 `smpon` + `smpuser` 当前可用于演示多核用户调度。
+2. **TRAP 12 未从机制上根治**：收敛很可能是 S421 修正 CR3/cur_pd 失配的连带
+   效果，而非定位到独立根因。若 soak 中复现，用 `os_smp.md` §12/§15 的反汇编
+   方法（`cmpl $1,(%eax)`、崩溃点 `cpus[cid].ci_curthread`）重新取证。
+3. **`kthread_reap()` 锁域错配**：`t_used=0` 的发布不持 `kthread_alloc_lock`，
+   与 `tcb_reserve()` 的锁域不一致——这是**真实存在的结构性隐患**。加锁实验
+   8 轮全过，但不加锁对照基线同样 8 轮全过、无区分度，故改动已回退、未提交。
+   需在能稳定复现时再验证并决定是否修。
+4. **多核 idle 串口输出字符交错**：`smp_print()` 与用户命令的 `write` 走两条
+   路径（`printf` 有 `console_lock`，用户态 `write` 没有），并发时字符会穿插。
+   次要，但影响日志可读性。
+5. **疑似 `console_lock` 中断上下文自锁**：高负载下观察到一次系统无响应，
+   未稳定复现；若再现，检查中断路径是否尝试再取 `console_lock`。
+6. **连续 `vmkeys` 发命令出现 `foreground was ...` 焦点提示**、命令不再生效：
+   对照实验证明共享 scratch 版同样如此，属键盘工具 / VMware 窗口焦点问题，
+   非内核死锁（两版 TRAP 均为 0）。不必按内核 bug 处理。
+
+### 6.2 其它无锁 / 共享数据结构（结构性隐患，均未修）
+
+多核审查（见 `os_smp.md` §12）发现的共享队列/链表，当前因大多在 BKL 内或
+尚未被 AP 并发触达而未出问题，但属潜在风险，SMP 全面启用前应逐一评估：
+
+- `defer` 环形队列、`aio` 队列（BKL 外内核线程可能触碰）。
+- `pagecache` / `bufcache` 的 LRU 与 hash 链表（S17 实现，无锁）。
+- `io_uring` 风格环（如已启用）。
+- 运行队列 `rq_head/rq_tail` 与 scratch 窗口已分别由 S418 / S420 修复，不在
+  此列。
+
+### 6.3 调度 / 作业控制功能缺口
+
+- **真 `fg`/`bg`**：sh 监视模式（`set -m`）+ `tcsetpgrp` + 后台读终端
+  `SIGTTIN`（工作量最大的一项，见顶部 0.0.5 / S10.2 限制）。
+- **per-process tty/session 信息**：补齐后 `ps -a`/`-x` 才有真实 BSD 语义；
+  当前 `ps` 列出全部进程。
+- **`/bin/kill` 的 `%job` 写法**：4.5BSD sh 无 `kill` 内建，需作业表配合。
+- **`sleep(1)` 真实现**：当前忙等假实现，`tv_usec` 恒 0；真 sleep 要等时钟
+  中断 / 超时队列（与 S10.2 / S16 限制同源）。
+- **turnstile 优先级传播**：当前 TCB 标量继承够用；只有引入可睡眠锁 + 锁嵌套
+  + 多 donor 争同一锁 + 实时性要求四前提后才值得上（见本文件 §5）。
+
+### 6.4 内存 / 文件系统 / 架构路线（长期，未开工）
+
+- **demand paging + COW**：`mmap` 目前只支持 offset 0、`MAP_PRIVATE` 是
+  map 时复制；升级到缺页复制需先有用户态 page fault 处理（当前 fault 停机）。
+- **B4 UFS/FFS**：继续暂缓——缺 ATA 硬盘驱动，`kernel/fs/ufs/*` 无实现。
+- **S100 微内核化路线**：`S100.2a`（tmpfs 从 `vfs.c` 拆出）已做；
+  `S100.3`（KP-4/6/7 + `fs_server` 最小实验）、`S100.4`（宏/微度量对照）
+  未开工。硬性约束：不许牺牲 15 套验收、先文档后代码、实验放独立分支
+  `exp/microkernel`（见 `bsd45/RESUME-TASK.md` 的 S100 节）。
+- **路线 A（真·移植 4.5BSD 内核核心）**：恢复 `vfs_bio.c` 删除体、生成
+  `vnode_if.h`、带起完整 kern/* 与 VFS 初始化，长期方向，当前验收用不上。
