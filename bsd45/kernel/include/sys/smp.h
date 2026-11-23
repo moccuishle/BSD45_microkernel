@@ -86,6 +86,9 @@ extern int cpu_logical, cpu_cores, cpu_smt, cpu_htt;
 extern char cpu_vendor[13];
 int	cpu_topology_detect(void);
 void	cpuinfo_print(void);
+/* S415: SMT placement hints (APIC-id based). */
+int	smt_phys_core(int apic_id);	/* physical core of a logical CPU */
+int	smt_sibling(int apic_id);	/* other logical thread, or -1 if no SMT */
 
 /* boot / AP startup */
 void	smp_init(void);		/* called by BSP after pmap+GDT ready */

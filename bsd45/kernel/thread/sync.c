@@ -20,7 +20,7 @@
 #include "arch/i386/io.h"
 
 /* ---- current-thread resolution ------------------------------------ */
-extern struct kthread *curk;
+/* S414: curk is a per-CPU macro from kthread.h now, no extern needed. */
 extern void kthread_block(void);
 extern void kthread_wake(struct kthread *t);
 extern void sched_on_wake(struct kthread *t);

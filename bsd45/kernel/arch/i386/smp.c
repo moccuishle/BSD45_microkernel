@@ -287,6 +287,39 @@ cpu_topology_detect(void)
 	return (cpu_logical);
 }
 
+/*
+ * S415: SMT topology helpers.  AP IDs are handed out consecutively, and
+ * cpu_smt is the number of logical processors sharing one physical core
+ * (from CPUID leaf 0xB/0x1F, detected above).  With that, the physical core
+ * number is simply apic_id / cpu_smt and the sibling thread of a CPU is the
+ * other slot in the same group.  These are placement hints only: the
+ * scheduler still claims a TCB with an atomic op, so two CPUs can never end
+ * up running the same thread even if a hint is stale.
+ *
+ * S415：SMT 拓扑辅助。APIC ID 连续分配，cpu_smt 是共享一个物理核的逻辑
+ * 处理器数（由 CPUID leaf 0xB/0x1F 检测）。于是物理核号 = apic_id/cpu_smt，
+ * 同核兄弟是同组里的另一个槽位。这些只是放置提示：线程仍用原子操作认领，
+ * 所以即使提示过期，也不会有两个核跑同一线程。
+ */
+int
+smt_phys_core(int apic_id)
+{
+
+	if (cpu_smt <= 1)
+		return (apic_id);	/* no SMT: every logical CPU is its own core */
+	return (apic_id / cpu_smt);
+}
+
+int
+smt_sibling(int apic_id)
+{
+
+	if (cpu_smt <= 1)
+		return (-1);		/* no sibling without SMT */
+	return ((apic_id / cpu_smt) * cpu_smt +
+	    ((apic_id + 1) % cpu_smt));
+}
+
 void
 cpuinfo_print(void)
 {

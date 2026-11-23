@@ -17,6 +17,7 @@
 #define _KTHREAD_H_
 
 #include "sys/platform.h"
+#include "sys/smp.h"		/* MAXCPU + cpu_id() for the per-CPU curk macro */
 
 /*
  * KLT pool (S407/S410/S411): the TCB table capacity is now a *runtime*
@@ -81,6 +82,7 @@ extern int	nkthread;	/* runtime TCB slots, set by mem_plan_init() */
 #define	CPU_BOUND_THRESHOLD	3	/* consecutive CPU quanta => CPU-bound */
 
 #define	KSTACK_VA	0xFC000000	/* S411: 16 MB, 1024 x 16 KB */
+#define	KTHREAD_TABLE_VA 0xFEF00000	/* S410: TCB pool window */
 #define	KSTACK_SIZE	16384
 
 struct proc;
@@ -149,7 +151,16 @@ struct kthread {
 	int		t_boosted;	/* inheriting a higher level */
 };
 
-extern struct kthread *curk;
+/*
+ * S414: "current kernel thread" is per-CPU.  The macro expands to an lvalue
+ * (curk_percpu[cpu_id()]) so the existing `curk = t;` assignments keep
+ * working, while two CPUs no longer share one pointer.
+ * S414：当前内核线程按核分开。宏展开为左值，原有的 `curk = t;` 赋值无需改动，
+ * 但两个核不再共用一个指针。
+ */
+extern struct kthread *curk_percpu[MAXCPU];
+#define	curk		(curk_percpu[cpu_id()])
+struct kthread *kthread_current(void);
 /* TCB pool lives in a VA window, not in .bss (see kthread.c). */
 extern struct kthread *kthreads;
 void kthread_table_init(void);

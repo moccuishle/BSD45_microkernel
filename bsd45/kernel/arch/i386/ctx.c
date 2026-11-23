@@ -48,6 +48,16 @@ hal_kernel_stack_set(unsigned top)
 {
 	struct i386tss *t = cpu_tss(cpu_id());
 
+	/*
+	 * S414 diagnostic: the ring-0 stack must come from the stack pool
+	 * (0xFC000000..) or an AP carrier stack in .bss.  A TCB-pool address
+	 * (0xFEF00000..) means somebody handed the scheduler a struct
+	 * kthread instead of a stack - which is how the BSP ended up
+	 * executing with esp=0xFEF001E0 and dying on #SS.
+	 */
+	if (top >= KTHREAD_TABLE_VA && top < KTHREAD_TABLE_VA + 0x100000u)
+		printf("smp: cpu%d esp0 %x is inside the TCB pool\n",
+		    cpu_id(), top);
 	if (t != 0)
 		t->tss_esp0 = (int)top;
 }

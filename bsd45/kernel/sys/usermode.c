@@ -3285,6 +3285,27 @@ proc_sched(void)
 	int cid = cpu_id();
 	int i;
 
+	/*
+	 * S414: defence in depth.  sc_curthread must be 0, an AP idle
+	 * carrier (per_cpu_idle[]) or a TCB from the pool; a value like a
+	 * page-directory address means this CPU's scheduler state was
+	 * overwritten (the S413 TRAP 12 was exactly that: mt became
+	 * 0x6c6000, a page-directory pointer).  Drop it and keep scheduling
+	 * instead of faulting on a wild pointer.
+	 */
+	if (mt != 0 &&
+	    (mt < kthreads || mt >= kthreads + nkthread) &&
+	    (mt < per_cpu_idle || mt >= per_cpu_idle + MAXCPU)) {
+		printf("smp: cpu%d bad cur_thread %p (cur %p), resetting\n",
+		    cid, mt, cur);
+		mt = 0;
+		cur_thread = 0;
+	}
+	if (cid < 0 || cid >= MAXCPU) {
+		printf("smp: impossible cpu id %d\n", cid);
+		return;
+	}
+
 	for (;;) {
 		unsigned pd_to_load;
 
@@ -3395,6 +3416,19 @@ proc_sched(void)
 				resume_user(pd_to_load, regs);
 			}
 			kthread_release_cpu(t);	/* sig_deliver killed it */
+		}
+		/* S414 diagnostic: catch the stack-frame divergence that makes
+		 * mt (entry snapshot) read as a page directory on the BSP. */
+		{
+			unsigned _sp;
+			__asm __volatile("mov %%esp,%0" : "=r"(_sp));
+			if (_sp >= KTHREAD_TABLE_VA && _sp < KTHREAD_TABLE_VA + 0x100000u)
+				printf("smp: cpu%d proc_sched esp=%x in TCB pool! me=%p mt=%p cur=%p cur_thread=%p\n",
+				    cid, _sp, me, mt, cur, cur_thread);
+			if (mt != 0 && (mt < kthreads || mt >= kthreads + nkthread) &&
+			    (mt < per_cpu_idle || mt >= per_cpu_idle + MAXCPU))
+				printf("smp: cpu%d pre-fallback BAD mt=%p me=%p esp=%x\n",
+				    cid, mt, me, _sp);
 		}
 		if (me != 0 && mt != 0 && mt->t_state == KT_RUN &&
 		    me->uk_state != P_ZOMBIE) {
@@ -3700,22 +3734,50 @@ sched_interaction_penalty(struct kthread *t)
 }
 
 /*
+ * S415: SMT/cache affinity score for dispatching TCB t on logical CPU cid.
+ * This is a tie-breaker only - it never changes a thread's dynamic priority
+ * or the preemption decision, so the BSD scheduler semantics stay intact.
+ *   +3  thread last ran on this exact CPU       (hot L1/L2, no migration)
+ *   +1  last ran on this physical core's SMT sibling (cheap intra-core move)
+ *    0  last ran elsewhere / never ran          (cold, normal placement)
+ * With no SMT (cpu_smt <= 1) the sibling case cannot occur.
+ * S415：分发 TCB 时的 SMT/cache 亲和分。仅作同优先级时的裁决，不改变动态
+ * 优先级或抢占语义。上次在本核跑过 +3；上次在同物理核的 SMT 兄弟上 +1；
+ * 其余 0。无 SMT 时不存在兄弟情况。
+ */
+static int
+smt_affinity_score(struct kthread *t, int cid)
+{
+	int last = t->t_lastcpu;
+
+	if (last < 0 || last >= MAXCPU)
+		return (0);
+	if (last == cid)
+		return (3);
+	if (cpu_smt > 1 && smt_phys_core((int)cpus[cid].ci_apicid) ==
+	    smt_phys_core((int)cpus[last].ci_apicid))
+		return (1);
+	return (0);
+}
+
+/*
  * EN: Pick the best runnable TCB.  Primary key is the DYNAMIC effective
  * priority (HIGHER = better, 0 lowest .. 19 highest).  I/O-woken, starved
  * and priority-inherited threads get boosted; CPU-bound threads stay low.
- * estcpu breaks ties so a process with many threads cannot dominate.
+ * estcpu and SMT affinity break ties so a process with many threads cannot
+ * dominate and a thread prefers the CPU (or physical core) it last used.
  */
 static struct kthread *
 fair_pick_next(struct kthread *me)
 {
 	struct kthread *best = 0;
-	int best_prio = -1, i, start;
+	int best_prio = -1, best_aff = -1, i, start;
 	int cid = cpu_id();
 
 	start = (me != 0) ? (me - kthreads) : 0;
 	for (i = 0; i < nkthread; i++) {
 		struct kthread *t = &kthreads[(start + i + 1) % nkthread];
-		int prio;
+		int prio, aff;
 
 		if (t == me || !tcb_runnable(t))
 			continue;
@@ -3732,11 +3794,15 @@ fair_pick_next(struct kthread *me)
 		if (kthread_owned_by_other(t, cid))
 			continue;
 		prio = sched_effective_prio(t);
+		aff = smt_affinity_score(t, cid);
 		if (best == 0 || prio > best_prio ||
 		    (prio == best_prio &&
-		     t->t_proc->uk_estcpu < best->t_proc->uk_estcpu)) {
+		     (aff > best_aff ||
+		      (aff == best_aff &&
+		       t->t_proc->uk_estcpu < best->t_proc->uk_estcpu)))) {
 			best = t;
 			best_prio = prio;
+			best_aff = aff;
 		}
 	}
 	return (best);

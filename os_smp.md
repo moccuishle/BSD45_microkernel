@@ -186,9 +186,12 @@ cr2=6c6000
 - 已排除：`cpu_id()` 位宽问题（已改成显式掩码）、TCB 槽位复用（已加延迟
   回收并验证 `alloc slot` 不再撞车）、内核栈溢出（已加 `KSTACK_CANARY`
   金丝雀，未触发）。
-- 剩余怀疑方向：`kthread_poll()` 的全局 `sched_esp` 与 `t_ksp` 在
-  「用户线程退出恰好发生在 BSP 跑内核线程的窗口」时被写坏；以及
-  `cd_map()` 的全局 4 MB 窗口 / 页缓存回收与另一核的读路径没有互斥。
+- S414 已把 `sched_esp`/`curk` 从全局改成每 CPU 一份（见 §11.1），
+  「两核写坏同一个全局调度栈」这条路已排除；崩溃仍在，但对栈帧布局极
+  敏感——加上一段只读诊断代码后即稳定通过 20+ 次 fork/exec，去掉又复现。
+  结论：`proc_sched()` 的栈上局部 `mt`（= 入口时的 `cur_thread` 快照）在
+  循环中被越界写覆盖，根因尚未精确定位（候选：某条深层调用链的栈溢出，
+  或 kswitch 换栈窗口）。`smp_user_dispatch` 因此仍默认 0。
 
 所以默认 `smp_user_dispatch = 0`。要演示多核用户调度：
 
@@ -198,8 +201,8 @@ bsd45> smpuser     # AP user dispatch on
 bsd45> shell
 ```
 
-S414 的第一件事就是把上面那条 TRAP 12 收掉（方向：把内核线程也改成
-「每核调度栈」而不是全局 `sched_esp`）。
+S414 把内核线程改成「每核调度栈」（见 §11.1），全局 `sched_esp` 已消除；
+TRAP 12 仍未彻底收敛（见上）。
 
 ---
 
@@ -439,3 +442,66 @@ PID PPID PGRP STAT COMM
    `resume_user` 的 `mov %edi,%ds`（选择子 0x1b/0x23）直接 9 号异常。
 8. **控制台要加锁**。两个核同时 `printf` 会把一行撕成交错字符，
    trap dump 会变得不可读；`printf`/`kprintf` 现在整行持 `console_lock`。
+
+---
+
+## 11. S414：每核调度栈 + IPI 段修复（2026-11-24）
+
+### 11.1 per-CPU `sched_esp` / `curk`
+
+S413 的内核线程半调度用**一个全局** `sched_esp`（kswitch 的返回栈）
+和一个全局 `curk`。两个核同时 `kthread_poll()` 时会互相覆盖这两个变量，
+第一个核「返回」时就落到别人的栈上。S414 把它们改成按 `cpu_id()` 索引
+的数组，`curk` 变成头文件里的宏 `curk_percpu[cpu_id()]`，约 15 处既有引用
+零改动（`sync.c` 的 `extern` 随之删除）。
+
+配套地把 `kthread_exit()` 的槽位释放改成延迟回收：线程不能在自己还站着的
+栈上把槽位发布出去，否则另一个核的 fork 会拿到同一张栈。现在由
+`kthread_reap()` 在本核换栈后再发布。
+
+`kthread_run()` 仍固定 BSP：运行队列是全局链表，AP 要 poll 还得先给它
+加自己的锁或按核分队列。用户线程不受此限，`proc_sched()` 在所有核分发。
+
+### 11.2 IPI 段寄存器修复
+
+`resume_user()` 在 `iret` 之前把用户数据选择子（0x27，limit `0xFDC00000`）
+装进 `ds/es`。IPI stub 原本不切段，若中断正好落在这个窗口，
+`smp_handle_ipi()` 第一条读内核全局（`lapic_va`）的指令就用用户段访问
+`0xFE...`，触发 #GP（陷阱打印成 TRAP 9，AP 上 `cs=8 ds=0x27`）。
+S414 的 `IPI_PROLOGUE` 现在保存 `ds/es`、切到内核段 0x10、返回时恢复。
+改完后 AP 上那条 #NM/#GP 消失，剩余崩溃集中到 BSP 的 TRAP 12（§5.2）。
+
+### 11.3 诊断与 TRAP 现状
+
+`hal_kernel_stack_set()` 加了「esp0 落进 TCB 池」断言，`kthread_poll()`
+加了 `t_ksp` 范围断言，`proc_sched()` 入口加了 `cur_thread` 合法性断言，
+循环末尾加了栈帧诊断。**这些断言全部为 0**——崩溃时 `mt` 在入口是合法的，
+是循环运行中被写坏的。加上循环末尾那段只读诊断后，同一负载连续 20+ 次
+fork/exec 不再复现 TRAP，说明故障对栈帧布局敏感（典型越界写 / 栈切换窗口），
+但根因尚未定位，不能宣称已修复。保留诊断作为哨兵。**`smp_user_dispatch`
+继续默认 0**；多核用户调度仍需手动 `smpon` + `smpuser`。
+
+### 11.4 S415：SMT / cache 亲和性
+
+拓扑已在 S412 由 CPUID 检测（`cpu_logical/cores/smt/htt`，见 `cpu_topology_detect`）。
+S415 补上放置侧：
+
+- `smp.c` 新增 `smt_phys_core(apic_id)`（`apic_id / cpu_smt`）与
+  `smt_sibling(apic_id)`（无 SMT 返回 -1）。
+- `fair_pick_next()` 增加 `smt_affinity_score(t, cid)`，仅作**同优先级裁决**：
+  上次在本核跑 +3（cache 热）、上次在同物理核的 SMT 兄弟上 +1（核内迁移
+  便宜）、其余 0。它不改动态优先级、不改抢占判定，BSD 调度语义不变。
+- `t_lastcpu` 在 `kthread_claim_cpu()` / `kthread_poll()` 里持续更新，
+  作为亲和性依据。
+
+效果依赖硬件：VMware 报 4 逻辑 / 4 物理核 / smt=1，兄弟路径不触发，
+只有「线程留在上次那颗核」的 cache 亲和生效；真 SMT 机器上才会走 +1
+的核内兄弟迁移。原子 claim 保证即使提示过期也不会两核跑同一线程。
+
+### 11.5 本轮验证
+
+- VMware 8 vCPU 配置（`vms/BSD45-SMP8.vmx`），`smpon` → 4 CPU 上线，
+  `cpuinfo` 报 logical 4 / cores 4 / smt 1 / htt 1；
+- `smpuser` + `shell` 下 `ls /bin`、`cat /readme.txt`、`date`、`ps`、`uname`
+  反复执行，TRAP / 栈诊断计数均为 0，`smp_print` 显示多个 CPU 都有切换；
+- 默认（不敲 `smpon`）仍为纯单核，与 S412 之前行为一致。

@@ -46,7 +46,7 @@ extern void bzero(void *, unsigned);
  * 0xFC000000; it is above CD_IMAGE_VA's 4 MB window and never collides
  * with a user mapping.
  */
-#define	KTHREAD_TABLE_VA	0xFEF00000	/* TCB pool: nkthread * sizeof */
+/* KTHREAD_TABLE_VA lives in kthread.h so ctx.c can sanity-check esp0. */
 struct kthread	*kthreads;
 
 extern void *kern_table_alloc(unsigned va, unsigned size);
@@ -92,9 +92,24 @@ kthread_prime_stacks(void)
 	for (va = (unsigned)KSTACK_VA; va < end; va += 4 * 1024 * 1024)
 		(void)kern_table_alloc(va, PAGE_SIZE);
 }
-static unsigned	sched_esp;
+/*
+ * S414: the kernel-thread half of the scheduler used to keep one global
+ * "where to return to" stack pointer and one global current TCB.  With more
+ * than one CPU polling the run queue those two are shared mutable state: the
+ * second CPU overwrites sched_esp with its own frame, and the first CPU then
+ * "returns" onto the other CPU's stack - which is how the BSP ended up
+ * executing proc_sched() with esp inside the TCB array (#SS, err=0).
+ *
+ * Both are per-CPU now.  curk is a macro over an array indexed by cpu_id(),
+ * so the ~15 existing uses need no change.
+ * S414：内核线程调度原来只有一个全局 sched_esp 和一个全局 curk。多核同时
+ * poll 运行队列时这两个是共享可变状态：第二个核把自己的栈帧写进 sched_esp，
+ * 第一个核再“返回”时就用上了别人的栈——这正是 BSP 在 proc_sched 里
+ * esp 落到 TCB 数组、触发 #SS(err=0) 的原因。现在两者都按 CPU 分开。
+ */
+static unsigned	sched_esp[MAXCPU];
 int	smpdbg = 0;	/* S413: temporary slot-recycle tracing */
-struct kthread	*curk;
+struct kthread *curk_percpu[MAXCPU];	/* curk is a macro over this */
 unsigned	kthread_switches;
 
 /*
@@ -331,8 +346,10 @@ kthread_init(void)
 		kthread_table_init();
 	bzero(kthreads, (unsigned)nkthread * sizeof(struct kthread));
 	bzero(kstack_mapped, sizeof(kstack_mapped));	/* no stack mapped yet */
-	curk = 0;
-	sched_esp = 0;
+	for (i = 0; i < MAXCPU; i++) {
+		curk_percpu[i] = 0;
+		sched_esp[i] = 0;
+	}
 	kthread_switches = 0;
 	rq_head = rq_tail = 0;
 	spin_init(&kthread_alloc_lock);
@@ -546,7 +563,7 @@ kthread_block(void)
 	rq_dequeue(t);			/* blocked TCB leaves the run queue */
 	sched_on_block(t);		/* start sleep-length accounting */
 	t->t_state = KT_BLOCK;
-	hal_switch_stack(&t->t_ksp, sched_esp);
+	hal_switch_stack(&t->t_ksp, sched_esp[cpu_id()]);
 }
 
 /* 中文：唤醒处于阻塞状态的线程，将其状态改回 KT_RUN */
@@ -574,8 +591,23 @@ kthread_exit(void)
 		return;
 	rq_dequeue(t);			/* exiting TCB leaves the run queue */
 	t->t_state = KT_FREE;
-	t->t_used = 0;
-	hal_switch_stack(&t->t_ksp, sched_esp);
+	/*
+	 * S414: do not publish the slot from here.  This CPU is still
+	 * executing on t's kernel stack; another CPU's fork could claim the
+	 * slot, bzero it and hand the very same stack to a new thread, which
+	 * would then run with two CPUs inside it.  Hand the slot to the
+	 * deferred reap instead - it publishes only after this CPU has
+	 * switched off the stack (kthread_run() calls kthread_reap(0) right
+	 * after kthread_poll() returns).
+	 * S414：不在这里放开槽位。本核还跑在 t 的内核栈上，另一个核 fork 时
+	 * 可能抢到该槽、bzero 它并把同一张栈交给新线程，两核就同栈了。改为交给
+	 * 延迟回收，等本核切走（kthread_run 在 poll 返回后调 kthread_reap(0)）
+	 * 再发布。
+	 */
+	t->t_reap_cpu = cpu_id();
+	if (nreap[cpu_id()] < nkthread)
+		nreap[cpu_id()]++;
+	hal_switch_stack(&t->t_ksp, sched_esp[cpu_id()]);
 	for (;;)
 		;
 }
@@ -604,35 +636,63 @@ kthread_poll(void)
 	if (t == 0)
 		return;
 	rq_dequeue(t);			/* running: off the queue */
+	/*
+	 * S414 diagnostic: a TCB on the run queue must have a kernel stack in
+	 * the stack pool.  t_ksp == 0 means a user TCB leaked into the kernel
+	 * run queue (it never gets one); a TCB-pool address means the field
+	 * was overwritten.  Either way, switching to it would fault.
+	 */
+	if (t->t_ksp < KSTACK_VA ||
+	    t->t_ksp > KSTACK_VA + (unsigned)NKTHREAD_MAX * KSTACK_SIZE) {
+		printf("smp: cpu%d poll tid %d bad ksp %x state %d\n",
+		    cpu_id(), t->t_tid, t->t_ksp, t->t_state);
+		return;
+	}
 	curk = t;
 	t->t_lastcpu = cpu_id();	/* S413: remember the host CPU */
 	kthread_switches++;
-	hal_switch_stack(&sched_esp, t->t_ksp);
+	hal_switch_stack(&sched_esp[cpu_id()], t->t_ksp);
 	curk = 0;
 }
 
 /* 中文：运行所有可运行的内核线程，直到没有可运行者为止 */
 /* EN: Run all runnable kernel threads until none remain runnable */
+/*
+ * S414: per-CPU scheduler stacks landed, so sched_esp/curk are no longer
+ * shared.  The run queue itself is still a single global list, though:
+ * rq_head/rq_tail and the sched_* priority bookkeeping would need their own
+ * lock (or per-CPU queues) before APs could poll it.  Until then the
+ * kernel-thread half stays on the BSP; user threads are dispatched by
+ * proc_sched() on every CPU.  kernel threads are few (softirq, reclaim,
+ * IRP workers) so this is not the bottleneck.
+ * S414：每核调度栈已经有了，sched_esp/curk 不再共享。但运行队列仍是全局
+ * 链表：rq_head/rq_tail 与 sched_* 记账需要自己的锁（或按核分队列）才能让
+ * AP 也来 poll。在那之前内核线程仍固定在 BSP；用户线程由 proc_sched 分发
+ * 到所有核。内核线程数量很少（softirq/回收/IRP），不构成瓶颈。
+ */
 void
 kthread_run(void)
 {
 
-	/*
-	 * S413: kernel threads still run on CPU 0 only.
-	 *
-	 * kthread_poll() switches into a TCB with kswitch() through one global
-	 * scheduler stack (sched_esp); two CPUs doing that would share the
-	 * stack and the global curk.  The kernel-thread half therefore stays
-	 * pinned to the BSP until per-CPU scheduler stacks land (S414); user
-	 * threads are already dispatched on every CPU by proc_sched().
-	 * S413：内核线程仍然只在 CPU0 上跑。kthread_poll 通过全局 sched_esp
-	 * 用 kswitch 切栈，两个核同时做会共用栈和全局 curk。等 S414 做完每核
-	 * 调度栈再把内核线程放开；用户线程已经由 proc_sched 分发到所有核。
-	 */
 	if (cpu_id() != 0)
 		return;
-	while (kthread_runnable())
+	while (kthread_runnable()) {
 		kthread_poll();
+		/*
+		 * poll returning means this CPU is back on sched_esp, i.e.
+		 * it no longer runs on the exiting thread's stack.  Only now
+		 * may that slot be handed out again.
+		 */
+		kthread_reap(0);
+	}
+}
+
+/* S414: the current TCB of this CPU (0 when running on the sched stack). */
+struct kthread *
+kthread_current(void)
+{
+
+	return (curk);
 }
 
 /* 中文：调试输出，打印切换次数及所有已用线程的 tid、类型、名称、状态等信息 */
