@@ -207,14 +207,34 @@ kthread_reap(struct kthread *leaving)
  * is enqueued when it becomes runnable and dequeued when it blocks/exits.
  */
 static struct kthread *rq_head, *rq_tail;
+/*
+ * S418: the run queue is global but wake/block/exit now run on every CPU.
+ * Without this lock an AP's rq_enqueue() can interleave with the BSP's
+ * rq_dequeue(): rq_tail->t_rqnext / rq_head / rq_tail are read-modify-write
+ * and a concurrent update corrupts t_rqnext into a wild pointer.  That was
+ * the real root cause of the BSP TRAP 12 (a TCB slot got scribbled with a
+ * page-directory value).  No IRQ handler touches this queue - sched_tick()
+ * only reads runnable state - so a plain spinlock is sufficient.
+ *
+ * S418：运行队列是全局的，但唤醒/阻塞/退出现在发生在每个核上。没有这把锁，
+ * AP 的 rq_enqueue 会与 BSP 的 rq_dequeue 交错，rq_tail->t_rqnext/rq_head/
+ * rq_tail 的读改写会把 t_rqnext 破坏成野指针——这正是 BSP TRAP 12 的根因
+ * （某个 TCB 槽被写进页目录值）。中断处理不碰这个队列，普通自旋锁足够。
+ */
+static struct spinlock rq_lock;
 
 /* EN: Enqueue a TCB at the tail of the run queue (idempotent via t_onrq). */
 static void
 rq_enqueue(struct kthread *t)
 {
 
-	if (t == 0 || t->t_onrq)
+	if (t == 0)
 		return;
+	spin_lock(&rq_lock);
+	if (t->t_onrq) {
+		spin_unlock(&rq_lock);
+		return;
+	}
 	t->t_rqnext = 0;
 	t->t_onrq = 1;
 	if (rq_tail != 0)
@@ -224,6 +244,7 @@ rq_enqueue(struct kthread *t)
 	rq_tail = t;
 	if (t->t_proc != 0)
 		t->t_proc->uk_rq_threads++;
+	spin_unlock(&rq_lock);
 }
 
 /* EN: Remove a TCB from the run queue by walking with a predecessor pointer. */
@@ -232,8 +253,13 @@ rq_dequeue(struct kthread *t)
 {
 	struct kthread *p, *prev = 0;
 
-	if (t == 0 || !t->t_onrq)
+	if (t == 0)
 		return;
+	spin_lock(&rq_lock);
+	if (!t->t_onrq) {
+		spin_unlock(&rq_lock);
+		return;
+	}
 	for (p = rq_head; p != 0; prev = p, p = p->t_rqnext) {
 		if (p == t) {
 			if (prev != 0)
@@ -249,6 +275,7 @@ rq_dequeue(struct kthread *t)
 	t->t_onrq = 0;
 	if (t->t_proc != 0 && t->t_proc->uk_rq_threads > 0)
 		t->t_proc->uk_rq_threads--;
+	spin_unlock(&rq_lock);
 }
 
 /* 中文：内核线程入口跳板，调用线程的实际入口函数并在返回后退出线程 */

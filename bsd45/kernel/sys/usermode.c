@@ -362,6 +362,8 @@ struct sched_cpu {
 };
 static struct sched_cpu	sched_cpu[MAXCPU];
 static struct kthread	per_cpu_idle[MAXCPU];	/* AP carriers, not pooled */
+/* S417: caller TCB of each proc_sched(), kept off the (clobberable) stack. */
+static struct kthread	*ps_mt[MAXCPU];
 /* S413: print one per-CPU summary each time the machine goes idle again. */
 static int		idle_reported;
 
@@ -3281,10 +3283,28 @@ static void
 proc_sched(void)
 {
 	struct proc *me = cur;
-	struct kthread *mt = cur_thread;
+	struct kthread *mt;
 	int cid = cpu_id();
 	int i;
 
+	/*
+	 * S417: keep the "thread that called the scheduler" in a per-CPU
+	 * global, NOT in a stack local.  The TRAP 12 at the end of this loop
+	 * (mt suddenly reading as a page directory, 0x6c6000, while `me` in
+	 * the adjacent slot stayed valid) was a stack-local `mt` being
+	 * overwritten somewhere in the deep signal/exit call chain: resume_user()
+	 * leaves this frame via iret and a later syscall re-enters the kernel on
+	 * a different stack, so the value has to survive outside the frame.
+	 * Any probe added inside this function changed the frame layout and
+	 * hid the bug - a sure sign of a stack-slot clobber.  A per-CPU slot
+	 * is immune to that and is the natural home for scheduler state.
+	 */
+	if (cid < 0 || cid >= MAXCPU) {
+		printf("smp: impossible cpu id %d\n", cid);
+		return;
+	}
+	mt = cur_thread;
+	ps_mt[cid] = mt;
 	/*
 	 * S414: defence in depth.  sc_curthread must be 0, an AP idle
 	 * carrier (per_cpu_idle[]) or a TCB from the pool; a value like a
@@ -3299,15 +3319,20 @@ proc_sched(void)
 		printf("smp: cpu%d bad cur_thread %p (cur %p), resetting\n",
 		    cid, mt, cur);
 		mt = 0;
+		ps_mt[cid] = 0;
 		cur_thread = 0;
-	}
-	if (cid < 0 || cid >= MAXCPU) {
-		printf("smp: impossible cpu id %d\n", cid);
-		return;
 	}
 
 	for (;;) {
 		unsigned pd_to_load;
+
+		/*
+		 * S417: re-read the caller TCB from the per-CPU slot at the
+		 * top of every iteration.  `mt` is a stack local and can be
+		 * clobbered by the deep call chain below (that was the TRAP 12);
+		 * the per-CPU copy is not on this stack.
+		 */
+		mt = ps_mt[cid];
 
 		/*
 		 * S413: the caller's kernel epoch ends here, on every path -
@@ -3416,19 +3441,6 @@ proc_sched(void)
 				resume_user(pd_to_load, regs);
 			}
 			kthread_release_cpu(t);	/* sig_deliver killed it */
-		}
-		/* S414 diagnostic: catch the stack-frame divergence that makes
-		 * mt (entry snapshot) read as a page directory on the BSP. */
-		{
-			unsigned _sp;
-			__asm __volatile("mov %%esp,%0" : "=r"(_sp));
-			if (_sp >= KTHREAD_TABLE_VA && _sp < KTHREAD_TABLE_VA + 0x100000u)
-				printf("smp: cpu%d proc_sched esp=%x in TCB pool! me=%p mt=%p cur=%p cur_thread=%p\n",
-				    cid, _sp, me, mt, cur, cur_thread);
-			if (mt != 0 && (mt < kthreads || mt >= kthreads + nkthread) &&
-			    (mt < per_cpu_idle || mt >= per_cpu_idle + MAXCPU))
-				printf("smp: cpu%d pre-fallback BAD mt=%p me=%p esp=%x\n",
-				    cid, mt, me, _sp);
 		}
 		if (me != 0 && mt != 0 && mt->t_state == KT_RUN &&
 		    me->uk_state != P_ZOMBIE) {

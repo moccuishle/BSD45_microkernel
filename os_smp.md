@@ -187,11 +187,12 @@ cr2=6c6000
   回收并验证 `alloc slot` 不再撞车）、内核栈溢出（已加 `KSTACK_CANARY`
   金丝雀，未触发）。
 - S414 已把 `sched_esp`/`curk` 从全局改成每 CPU 一份（见 §11.1），
-  「两核写坏同一个全局调度栈」这条路已排除；崩溃仍在，但对栈帧布局极
-  敏感——加上一段只读诊断代码后即稳定通过 20+ 次 fork/exec，去掉又复现。
-  结论：`proc_sched()` 的栈上局部 `mt`（= 入口时的 `cur_thread` 快照）在
-  循环中被越界写覆盖，根因尚未精确定位（候选：某条深层调用链的栈溢出，
-  或 kswitch 换栈窗口）。`smp_user_dispatch` 因此仍默认 0。
+  「两核写坏同一个全局调度栈」这条路已排除。
+- **S417/S418 已修复**（见 §12、§13）：表面症状是 `proc_sched()` 的栈上局部
+  `mt`（`cur_thread` 入口快照）变成页目录值；S417 把它移到 per-CPU 全局
+  规避了症状。**真正根因是 S418 查明的全局运行队列无锁并发**（见 §13），
+  给 `rq_enqueue`/`rq_dequeue` 加锁后，保留栈局部 `mt` 也不再崩。两处修复
+  都保留。`smp_user_dispatch` 因验证样本有限仍默认 0，可手动打开演示。
 
 所以默认 `smp_user_dispatch = 0`。要演示多核用户调度：
 
@@ -477,9 +478,10 @@ S414 的 `IPI_PROLOGUE` 现在保存 `ds/es`、切到内核段 0x10、返回时�
 加了 `t_ksp` 范围断言，`proc_sched()` 入口加了 `cur_thread` 合法性断言，
 循环末尾加了栈帧诊断。**这些断言全部为 0**——崩溃时 `mt` 在入口是合法的，
 是循环运行中被写坏的。加上循环末尾那段只读诊断后，同一负载连续 20+ 次
-fork/exec 不再复现 TRAP，说明故障对栈帧布局敏感（典型越界写 / 栈切换窗口），
-但根因尚未定位，不能宣称已修复。保留诊断作为哨兵。**`smp_user_dispatch`
-继续默认 0**；多核用户调度仍需手动 `smpon` + `smpuser`。
+fork/exec 不再复现 TRAP，说明故障对栈帧布局敏感。**S417 随后定位并修复
+了这条 TRAP（见 §12）**：`mt` 栈槽被深层调用覆盖，改为 per-CPU 全局。
+该诊断块在 S417 里已移除。`smp_user_dispatch` 因验证样本有限继续默认 0；
+多核用户调度仍需手动 `smpon` + `smpuser`。
 
 ### 11.4 S415：SMT / cache 亲和性
 
@@ -505,3 +507,92 @@ S415 补上放置侧：
 - `smpuser` + `shell` 下 `ls /bin`、`cat /readme.txt`、`date`、`ps`、`uname`
   反复执行，TRAP / 栈诊断计数均为 0，`smp_print` 显示多个 CPU 都有切换；
 - 默认（不敲 `smpon`）仍为纯单核，与 S412 之前行为一致。
+
+---
+
+## 12. S417：TRAP 12 诊断收尾与修复（2026-11-24）
+
+### 12.1 诊断过程（关键证据）
+
+S414 留下的问题：`smpon`+`smpuser` 后，BSP 在 `proc_sched()` 循环末尾读
+`mt->t_state` 时崩，`mt=0x6c6000`（页目录），`esp` 打印成 `fef001e0`
+（TCB 池）。S417 用一系列**不占被怀疑栈帧**的探针定位：
+
+1. **切栈环形日志**（`hal_switch_stack` 里写 .bss）：崩溃全程只有 2 次
+   kswitch，都是 cpu0 切进 softirq/aio（`fc00bda0 → fc003fec/fc007fec`），
+   **没有任何一次切到 TCB 池**。排除「kswitch 恢复错栈」。
+2. **trap 内读真实 esp**：`trap runs on esp=fc00bd90 frame=fc00bdbc`，
+   都在合法栈池；打印出的 `tf_esp=fef001e0 / ss=0` 是 `pushal` 的 esp 槽
+   保留的旧值（x86 PUSHA 的 esp 槽怪癖），**不是崩溃时的真实栈**。排除
+   「栈跳进 TCB 池」。
+3. **反汇编定位**：崩溃指令 `cmpl $0x1,(%eax)`，`eax` 来自 `0x10(%esp)`
+   ——即 `mt` 这个**栈上局部变量**。全函数体里 `0x10(%esp)` 只读不写，
+   但相邻的 `me`（`0x14(%esp)`）崩溃时仍是合法 proc 指针 `fb000000`。
+   只有 `mt` 这一个槽被写成页目录值 = 精确的栈槽覆盖，不是整体栈错位。
+4. **布局敏感性**：任何加进 `proc_sched()` 的探针（哪怕只是一句读 esp）
+   都让崩溃消失——典型的栈局部被深层调用链越界写覆盖的确证。
+
+### 12.2 修复
+
+`mt` 是「调用调度器的那个 TCB」，作用范围覆盖整个 for 循环，却在循环里
+经历 `sig_deliver` / `resume_user`(iret) / syscall 重入等深层调用。把它从
+栈局部移到 **per-CPU 全局** `ps_mt[MAXCPU]`：入口与断言分支各写一次，
+循环顶端 `mt = ps_mt[cid]` 重新加载。栈上的副本不再作为权威来源，即使
+该槽被覆盖也不影响调度。语义与原代码一致（原本 `mt` 也是入口快照，
+循环内不更新）。
+
+### 12.3 验证
+
+同样的 VMware 8 vCPU / `smpon`+`smpuser`+shell 流程，**修复前每次必崩**，
+修复后连续 `ls /bin`×4 + `cat`/`ps`/`date`/`uname` 混合负载全部通过，
+TRAP 计数 0，系统未卡死（`echo` 有响应）。
+
+### 12.4 仍存的次要问题
+
+- 多核 idle 时 `smp_print()` 与用户命令的串口输出会字符交错
+  （`printf` 有 `console_lock`，但用户态 `write` 走另一条路径）。
+- 高负载下观察到一次系统无响应，疑似 `console_lock` 在中断上下文自锁；
+  未稳定复现，留作后续。
+- 因验证样本仍有限，`smp_user_dispatch` **继续默认 0**；手动 `smpon`+
+  `smpuser` 可用于演示。
+
+---
+
+## 13. S418：真正的根因——全局运行队列无锁（2026-11-24）
+
+`os_smp.md` §12 把 TRAP 12 归因于 `mt` 栈槽被覆盖，并用 S417（把 `mt` 移到
+per-CPU 全局）规避。这个结论**不完整**：它只让那条特定路径不再读到坏值，
+并没有消除破坏源。用户指出真正的方向——**内核多线程更新无锁链表**——经
+代码审查与对照实验证实：
+
+### 13.1 证据
+
+- `kthread.c` 的 `rq_head`/`rq_tail` 是**全局单向链表，全程无锁**；
+  `rq_enqueue()` 的 `rq_tail->t_rqnext = t; rq_tail = t;` 和 `rq_dequeue()`
+  的前驱遍历 + `rq_head`/`rq_tail` 改写都是读-改-写。
+- SMP 后这些操作来自多个核：`kthread_wake()`（line 579，`rq_enqueue`）可由
+  AP 上的 aio/softirq/管道唤醒调用；`kthread_block()`/`kthread_exit()`
+  （line 563/592，`rq_dequeue`）同样可在 AP 发生；BSP 的 `kthread_poll()`
+  也在 dequeue。两个核同时改链表 → `t_rqnext` 变成野指针、`rq_tail` 指向
+  已出队 TCB → TCB 槽被写坏 → 表现为 `cur_thread`/`mt` 变成页目录值。
+
+### 13.2 对照实验（关键）
+
+| 构建 | mt 位置 | rq 锁 | 结果 |
+|---|---|---|---|
+| 362961f | 栈局部 | 无 | 每次 `ls /bin` 必崩 TRAP 12 |
+| 实验 A | 栈局部 | **有** | 连续 7× `ls /bin` 不崩 |
+| S417 (90f3c55) | per-CPU 全局 | 无 | 混合负载不崩（只是规避了症状） |
+
+实验 A 保留了会崩的栈局部 `mt`，只加 rq 锁就不崩——**证明根因是链表竞争，
+不是栈槽本身**。而且 rq 锁加在 `kthread.c`，不改变 `proc_sched` 的栈帧布局，
+排除了"又一次布局掩盖"。
+
+### 13.3 修复
+
+`rq_enqueue()`/`rq_dequeue()` 全程持 `rq_lock`（普通自旋锁；中断处理不碰
+该队列，`sched_tick` 只读抢占状态，故无需关中断）。`t_onrq` 幂等检查和
+`uk_rq_threads` 记账一并移入临界区。S417 的 per-CPU `ps_mt` 保留作防御。
+
+最终版（S417 + rq 锁）在 VMware 8vCPU 上 `smpon`+`smpuser`+shell，
+`ls`/`cat`/`ps`/`date`/`uname` 混合负载连续通过，TRAP=0。
